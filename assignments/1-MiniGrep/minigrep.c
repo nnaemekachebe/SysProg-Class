@@ -34,7 +34,14 @@ void usage(char *exename) {
  */
 int str_len(char *str) {
     // TODO: Implement string length calculation
-    return 0;  // placeholder
+    char *counter_pointer;
+    counter_pointer = str;
+
+    while(*counter_pointer != '\0'){
+        counter_pointer++;
+    }
+
+    return (counter_pointer - str);
 }
 
 /**
@@ -54,7 +61,42 @@ int str_match(char *line, char *pattern, int case_insensitive) {
     // TODO: Implement pattern matching
     // Remember: pattern can appear anywhere in the line
     // For case-insensitive, compare characters after converting to same case
-    return 0;  // placeholder
+
+    
+    char *line_seeker;
+    char pattern_store;
+
+    int pattern_length = str_len(pattern);
+
+    if (case_insensitive){
+        pattern_store = tolower(*pattern);
+        *line = tolower(*line);
+    }
+    line_seeker = line;
+    pattern_store = *pattern;
+    int counter=0;
+
+    while(*line_seeker != '\n'){
+        if (*line_seeker == pattern_store){
+            for(counter = 0; counter<pattern_length; line_seeker++, pattern_store++){
+                if (*line_seeker == pattern_store){
+                    counter++;
+                }
+                else{
+                    counter = 0;
+                    break;
+                }
+            }
+        }
+        line_seeker++;
+    }
+
+    if (counter != 0){
+        return 1;
+    }
+    else{
+        return 0;
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -127,11 +169,19 @@ int main(int argc, char *argv[]) {
     // TODO: Allocate memory for line buffer using malloc
     // Use LINE_BUFFER_SZ for the size
     // Check if malloc succeeds, if not exit with code 4
+    line_buffer = malloc(LINE_BUFFER_SZ);
+    if (line_buffer == NULL){
+        exit(4);
+    }
     
     
     // TODO: Open the file
     // Use fopen() with "r" mode
     // Check if fopen succeeds, if not print error and exit with code 3
+    fp = fopen(filename, "r");
+    if (fp == NULL){
+        exit(3);
+    }
     
     
     // TODO: Read file line by line
@@ -145,16 +195,24 @@ int main(int argc, char *argv[]) {
     //
     // Hint: fgets() returns NULL when end of file is reached
     // Hint: fgets() includes the newline character, you may want to handle that
+    while (fgets(line_buffer, LINE_BUFFER_SZ, fp) != NULL){
+        if(str_match(line_buffer, pattern, 1)){
+            printf("%s", line_buffer);
+        }
+
+
+    }
     
     
     // TODO: Close the file using fclose()
-    
+    fclose(fp);
     
     // TODO: If count_only flag is set, print the match count
     // Format: "Matches found: X" or "No matches found" if count is 0
     
     
     // TODO: Free the line buffer
+    free(line_buffer);
     
     
     // Exit with appropriate code
