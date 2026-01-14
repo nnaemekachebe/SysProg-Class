@@ -28,7 +28,7 @@ void usage(char *exename) {
  * 
  * Returns: length of string (not including null terminator)
  * 
- * TODO: IMPLEMENT THIS FUNCTION
+ * TODO: IMPLEMENT THIS FUNCTION todo
  * You must use pointer arithmetic, no array notation
  * Do NOT use strlen() from standard library
  */
@@ -64,39 +64,45 @@ int str_match(char *line, char *pattern, int case_insensitive) {
 
     
     char *line_seeker;
-    char pattern_store;
+    char *pattern_store;
+    char *temp_line_seeker;
 
     int pattern_length = str_len(pattern);
-
-    if (case_insensitive){
-        pattern_store = tolower(*pattern);
-        *line = tolower(*line);
+    if(pattern_length <= 0){
+        return 0;
     }
+
+    //if (case_insensitive){
+    //    *pattern_store = tolower(*pattern);
+    //    *line = tolower(*line);
+    //}
+
     line_seeker = line;
-    pattern_store = *pattern;
     int counter=0;
 
-    while(*line_seeker != '\n'){
-        if (*line_seeker == pattern_store){
-            for(counter = 0; counter<pattern_length; line_seeker++, pattern_store++){
-                if (*line_seeker == pattern_store){
+    
+
+    while(*line_seeker != '\0'){
+        pattern_store = pattern;
+        if (*line_seeker == *pattern_store){
+            for(counter = 0, temp_line_seeker = line_seeker; counter<pattern_length; temp_line_seeker++, pattern_store++){
+                if (*temp_line_seeker == *pattern_store && *temp_line_seeker != '\0'){
                     counter++;
+                    if (counter == pattern_length){
+                    return 1;
+                }
                 }
                 else{
                     counter = 0;
                     break;
                 }
+                
             }
         }
         line_seeker++;
     }
 
-    if (counter != 0){
-        return 1;
-    }
-    else{
         return 0;
-    }
 }
 
 int main(int argc, char *argv[]) {
@@ -180,6 +186,7 @@ int main(int argc, char *argv[]) {
     // Check if fopen succeeds, if not print error and exit with code 3
     fp = fopen(filename, "r");
     if (fp == NULL){
+        printf("Error: cannot open file %s\n", filename);
         exit(3);
     }
     
@@ -196,7 +203,8 @@ int main(int argc, char *argv[]) {
     // Hint: fgets() returns NULL when end of file is reached
     // Hint: fgets() includes the newline character, you may want to handle that
     while (fgets(line_buffer, LINE_BUFFER_SZ, fp) != NULL){
-        if(str_match(line_buffer, pattern, 1)){
+        if(str_match(line_buffer, pattern, case_insensitive)){
+            match_count++;
             printf("%s", line_buffer);
         }
 
