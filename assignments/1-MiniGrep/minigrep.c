@@ -84,14 +84,26 @@ int str_match(char *line, char *pattern, int case_insensitive) {
 
     while(*line_seeker != '\0'){
         pattern_store = pattern;
-        if (*line_seeker == *pattern_store){
+        char pattern_store_sensitive = *pattern_store;
+        char line_seeker_sensitive = *line_seeker;
+
+        if (case_insensitive){
+            pattern_store_sensitive = tolower(pattern_store_sensitive);
+            line_seeker_sensitive = tolower(line_seeker_sensitive);
+        }
+        if (pattern_store_sensitive == line_seeker_sensitive){
             for(counter = 0, temp_line_seeker = line_seeker; counter<pattern_length; temp_line_seeker++, pattern_store++){
-                if (*temp_line_seeker == *pattern_store && *temp_line_seeker != '\0'){
+                char pattern_store_sensitive = *pattern_store;
+                char line_seeker_sensitive = *temp_line_seeker;
+                if (case_insensitive){
+                pattern_store_sensitive = tolower(pattern_store_sensitive);
+                line_seeker_sensitive = tolower(line_seeker_sensitive);
+                }
+                if (pattern_store_sensitive == line_seeker_sensitive && *temp_line_seeker != '\0'){
                     counter++;
                     if (counter == pattern_length){
                     return 1;
-                }
-                }
+                }}
                 else{
                     counter = 0;
                     break;
@@ -202,14 +214,63 @@ int main(int argc, char *argv[]) {
     //
     // Hint: fgets() returns NULL when end of file is reached
     // Hint: fgets() includes the newline character, you may want to handle that
+    int line_counter = 1;
+    int not_match_count = 0;
     while (fgets(line_buffer, LINE_BUFFER_SZ, fp) != NULL){
         if(str_match(line_buffer, pattern, case_insensitive)){
             match_count++;
-            printf("%s", line_buffer);
+        
+
+        if(show_line_nums){
+            if (match_count ==1){
+            printf("%d: matching line here \n", line_counter);
+            }
+            else 
+            {
+              printf("%d: another matching line \n", line_counter);  
+            }
         }
 
+        
 
+        if(!show_line_nums && !count_only && !invert_match){
+            printf("%s", line_buffer);
+        }
+        }
+
+        else{
+            if(invert_match){
+                printf("%s", line_buffer);
+                not_match_count++;
+
+                if(show_line_nums){
+                    if (match_count ==1){
+                    printf("%d: matching line here \n", line_counter);
+                    }
+                    else 
+                    {
+                    printf("%d: another matching line \n", line_counter);  
+                    }
+                    }
+
+            }
+        }
+    line_counter++;
     }
+
+    if(count_only){
+            if (match_count && !invert_match){
+            printf("Matches found: %d", match_count);
+            }
+
+            else if (match_count && invert_match){
+                printf("Matches found: %d", not_match_count);
+            }
+
+            else{
+                printf("No matches found");
+            }
+        }
     
     
     // TODO: Close the file using fclose()
