@@ -34,13 +34,17 @@ void usage(char *exename) {
  */
 int str_len(char *str) {
     // TODO: Implement string length calculation
+
+    //Create a character pointer to iterate over the length of the string
     char *counter_pointer;
     counter_pointer = str;
 
+    //While the pointer content isn't a null string, increment the counter
     while(*counter_pointer != '\0'){
         counter_pointer++;
     }
 
+    //Subtracting pointers gives the distance traversed
     return (counter_pointer - str);
 }
 
@@ -62,36 +66,36 @@ int str_match(char *line, char *pattern, int case_insensitive) {
     // Remember: pattern can appear anywhere in the line
     // For case-insensitive, compare characters after converting to same case
 
-    
+    //Pointers (dereferenced to be exact) for the line, pattern, and a temporary line pointer when the first characters match
+
     char *line_seeker;
     char *pattern_store;
     char *temp_line_seeker;
 
+    //check to make sure the pattern is not null
     int pattern_length = str_len(pattern);
     if(pattern_length <= 0){
         return 0;
     }
 
-    //if (case_insensitive){
-    //    *pattern_store = tolower(*pattern);
-    //    *line = tolower(*line);
-    //}
-
+    //setting the address of the line seeker to the start of the line, and initializing the counter
     line_seeker = line;
     int counter=0;
 
     
-
+    //beginning line traversal and initializing character stores
     while(*line_seeker != '\0'){
         pattern_store = pattern;
         char pattern_store_sensitive = *pattern_store;
         char line_seeker_sensitive = *line_seeker;
-
+    //setting both to lower if case insensitive
         if (case_insensitive){
             pattern_store_sensitive = tolower(pattern_store_sensitive);
             line_seeker_sensitive = tolower(line_seeker_sensitive);
         }
+    //if there's a match
         if (pattern_store_sensitive == line_seeker_sensitive){
+            //start 'rabbit hole search', and case sensitive case applies to every character
             for(counter = 0, temp_line_seeker = line_seeker; counter<pattern_length; temp_line_seeker++, pattern_store++){
                 char pattern_store_sensitive = *pattern_store;
                 char line_seeker_sensitive = *temp_line_seeker;
@@ -99,11 +103,13 @@ int str_match(char *line, char *pattern, int case_insensitive) {
                 pattern_store_sensitive = tolower(pattern_store_sensitive);
                 line_seeker_sensitive = tolower(line_seeker_sensitive);
                 }
+                //increment counter if it works, and if the pattern length is matched without hitting a null character, return 1
                 if (pattern_store_sensitive == line_seeker_sensitive && *temp_line_seeker != '\0'){
                     counter++;
                     if (counter == pattern_length){
                     return 1;
                 }}
+                //if not, reset counter and exit 'rabbit hole'
                 else{
                     counter = 0;
                     break;
@@ -214,13 +220,18 @@ int main(int argc, char *argv[]) {
     //
     // Hint: fgets() returns NULL when end of file is reached
     // Hint: fgets() includes the newline character, you may want to handle that
+
+    //initialize line counter and non_matching_line count
     int line_counter = 1;
     int not_match_count = 0;
+
+    //beign traversing line by line, storing using the LINE_BUFFER_SZ as the limit
     while (fgets(line_buffer, LINE_BUFFER_SZ, fp) != NULL){
+        //if a match occurs, increment
         if(str_match(line_buffer, pattern, case_insensitive)){
             match_count++;
         
-
+        //if show_line_nums is true, print line number
         if(show_line_nums){
             if (match_count ==1){
             printf("%d: matching line here \n", line_counter);
@@ -232,17 +243,19 @@ int main(int argc, char *argv[]) {
         }
 
         
-
+        //default case if none of the other flags are used
         if(!show_line_nums && !count_only && !invert_match){
             printf("%s", line_buffer);
         }
         }
 
+        //should a match not occur
         else{
+            //first, check if the invert_match holds true
             if(invert_match){
                 printf("%s", line_buffer);
                 not_match_count++;
-
+                //if show_line_nums is true, print line number
                 if(show_line_nums){
                     if (match_count ==1){
                     printf("%d: matching line here \n", line_counter);
@@ -257,12 +270,20 @@ int main(int argc, char *argv[]) {
         }
     line_counter++;
     }
-
+    
+    
+    
+    // TODO: Close the file using fclose()
+    fclose(fp);
+    
+    // TODO: If count_only flag is set, print the match count
+    // Format: "Matches found: X" or "No matches found" if count is 0
+    //print the count number 
     if(count_only){
             if (match_count && !invert_match){
             printf("Matches found: %d", match_count);
             }
-
+            
             else if (match_count && invert_match){
                 printf("Matches found: %d", not_match_count);
             }
@@ -271,13 +292,6 @@ int main(int argc, char *argv[]) {
                 printf("No matches found");
             }
         }
-    
-    
-    // TODO: Close the file using fclose()
-    fclose(fp);
-    
-    // TODO: If count_only flag is set, print the match count
-    // Format: "Matches found: X" or "No matches found" if count is 0
     
     
     // TODO: Free the line buffer
