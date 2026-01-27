@@ -66,11 +66,13 @@ int get_student(int fd, int id, student_t *s)
 
     int offset = (id - 1) * 64;
 
-    if (lseek(fd, offset, SEEK_SET)){
-        if (read(fd, s, 64)){
+    if (lseek(fd, offset, SEEK_SET) == -1){
+        if (read(fd, s, 64) == 64){
             return NO_ERROR;
         }
+        else if (read(fd, s, 64) == -1){
         return SRCH_NOT_FOUND;
+        }
     }
 
     return ERR_DB_FILE;
@@ -104,8 +106,48 @@ int get_student(int fd, int id, student_t *s)
 int add_student(int fd, int id, char *fname, char *lname, int gpa)
 {
     // TODO
-    printf(M_NOT_IMPL);
-    return NOT_IMPLEMENTED_YET;
+
+    int offset = (id - 1) * sizeof(student_t);
+    student_t check_if_valid;
+
+    if (lseek(fd, offset, SEEK_SET) != -1){
+
+        ssize_t n = read(fd, &check_if_valid, sizeof(student_t));
+        if ( n == sizeof(student_t)){
+            printf(M_ERR_DB_ADD_DUP);
+            return ERR_DB_OP;
+        }
+        else if (n == 0){
+            //some logic here
+            student_t new_student = {0};
+            strncpy(new_student.fname, fname, sizeof(new_student.fname));
+            strncpy(new_student.lname, lname, sizeof(new_student.lname));
+            new_student.id = id;
+            new_student.gpa = gpa;
+
+            //check if this worked
+            lseek(fd, offset, SEEK_SET);
+            if (n == sizeof(student_t)){
+                printf(M_STD_ADDED);
+                return NO_ERROR;
+            }
+
+            else{
+                printf(M_ERR_DB_WRITE);
+                return ERR_DB_FILE;
+            }
+        }
+
+
+    }
+    prinf(M_ERR_DB_READ);
+    return ERR_DB_FILE;
+
+
+
+
+    //printf(M_NOT_IMPL);
+    //return NOT_IMPLEMENTED_YET;
 }
 
 /*
