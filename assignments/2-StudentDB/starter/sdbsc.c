@@ -63,7 +63,17 @@ int open_db(char *dbFile, bool should_truncate)
 int get_student(int fd, int id, student_t *s)
 {
     // TODO
-    return NOT_IMPLEMENTED_YET;
+
+    int offset = (id - 1) * 64;
+
+    if (lseek(fd, offset, SEEK_SET)){
+        if (read(fd, s, 64)){
+            return NO_ERROR;
+        }
+        return SRCH_NOT_FOUND;
+    }
+
+    return ERR_DB_FILE;
 }
 
 /*
