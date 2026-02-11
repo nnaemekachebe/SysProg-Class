@@ -64,26 +64,36 @@ int get_student(int fd, int id, student_t *s)
 {
     // TODO
 
-    int offset = (id - 1) * 64;
+    off_t offset = (off_t)(id - 1) * sizeof(student_t);
 
-    if (lseek(fd, offset, SEEK_SET) == -1){
-        if (read(fd, s, 64) == 64){
-            return NO_ERROR;
-        }
-        else if (read(fd, s, 64) == -1){
+    if (lseek(fd, offset, SEEK_SET) == (off_t)-1)
+        return ERR_DB_FILE;
+
+    ssize_t n = read(fd, s, sizeof(student_t));
+    if (n < 0)
+        return ERR_DB_FILE;
+    if (n == 0)
         return SRCH_NOT_FOUND;
-        }
-    }
+    if (n != (ssize_t)sizeof(student_t))
+        return ERR_DB_FILE;
 
-    return ERR_DB_FILE;
+    if (memcmp(s, &EMPTY_STUDENT_RECORD, sizeof(student_t)) == 0)
+        return SRCH_NOT_FOUND;
+
+    // optional sanity
+    if (s->id != id)
+        return SRCH_NOT_FOUND;
+
+    return NO_ERROR;
+
 }
 
 /*
  *  add_student
  *      fd:     linux file descriptor
  *      id:     student id (range is defined in db.h )
- *      fname:  student first name
- *      lname:  student last name
+ *      fname:  student FIRST_NAME
+ *      lname:  student LAST_NAME
  *      gpa:    GPA as an integer (range defined in db.h)
  *
  *  Adds a new student to the database.  After calculating the index for the
@@ -105,83 +115,53 @@ int get_student(int fd, int id, student_t *s)
  */
 int add_student(int fd, int id, char *fname, char *lname, int gpa)
 {
-    // TODO
+    off_t offset = (off_t)(id - 1) * sizeof(student_t);
 
-    int offset = (id - 1) * sizeof(student_t);
-    student_t check_if_valid;
-
-    if (lseek(fd, offset, SEEK_SET) != -1){
-
-        ssize_t n = read(fd, &check_if_valid, sizeof(student_t));
-
-        if ( n < 0){
-            printf(M_ERR_DB_READ);
-            return ERR_DB_FILE;
-        }
-
-        if ( n == sizeof(student_t)){
-            if(memcmp(&check_if_valid, &EMPTY_STUDENT_RECORD, sizeof(student_t)) != 0){
-            printf(M_ERR_DB_ADD_DUP);
-            return ERR_DB_OP;
-        }
-        else{
-            //some logic here
-            student_t new_student = {0};
-            strncpy(new_student.fname, fname, sizeof(new_student.fname)-1);
-            strncpy(new_student.lname, lname, sizeof(new_student.lname)-1);
-            new_student.id = id;
-            new_student.gpa = gpa;
-
-            //check if this worked
-            lseek(fd, offset, SEEK_SET);
-            ssize_t m = write(fd, &new_student, sizeof(student_t));
-            if (m == sizeof(student_t)){
-                printf(M_STD_ADDED);
-                return NO_ERROR;
-            }
-
-            else{
-                printf(M_ERR_DB_WRITE);
-                return ERR_DB_FILE;
-            }
-        }
-        }
-        else if (n == 0){
-            //some logic here
-            student_t new_student = {0};
-            strncpy(new_student.fname, fname, sizeof(new_student.fname)-1);
-            strncpy(new_student.lname, lname, sizeof(new_student.lname)-1);
-            new_student.id = id;
-            new_student.gpa = gpa;
-
-            //check if this worked
-            lseek(fd, offset, SEEK_SET);
-            if (n == sizeof(student_t)){
-                printf(M_STD_ADDED);
-                return NO_ERROR;
-            }
-
-            else{
-                printf(M_ERR_DB_WRITE);
-                return ERR_DB_FILE;
-            }
-        }
-        else{
-            printf(M_ERR_DB_READ);
-            return ERR_DB_FILE;
-        }
-
-
+    if (lseek(fd, offset, SEEK_SET) == (off_t)-1) {
+        printf(M_ERR_DB_READ);
+        return ERR_DB_FILE;
     }
-    printf(M_ERR_DB_READ);
-    return ERR_DB_FILE;
 
+    student_t cur;
+    ssize_t n = read(fd, &cur, sizeof(student_t));
+    if (n < 0) {
+        printf(M_ERR_DB_READ);
+        return ERR_DB_FILE;
+    }
+    if (n != 0 && n != (ssize_t)sizeof(student_t)) {
+        printf(M_ERR_DB_READ);
+        return ERR_DB_FILE;
+    }
 
+    // If slot already occupied -> duplicate
+    if (n == (ssize_t)sizeof(student_t) &&
+        memcmp(&cur, &EMPTY_STUDENT_RECORD, sizeof(student_t)) != 0) {
+        printf(M_ERR_DB_ADD_DUP, id);
+        return ERR_DB_OP;
+    }
 
+    student_t s = EMPTY_STUDENT_RECORD; // ensures zero-fill
+    s.id = id;
+    s.gpa = gpa;
+    strncpy(s.fname, fname, sizeof(s.fname) - 1);
+    strncpy(s.lname, lname, sizeof(s.lname) - 1);
 
-    //printf(M_NOT_IMPL);
-    //return NOT_IMPLEMENTED_YET;
+    if (lseek(fd, offset, SEEK_SET) == (off_t)-1) {
+        printf(M_ERR_DB_READ);
+        return ERR_DB_FILE;
+    }
+
+    ssize_t w = write(fd, &s, sizeof(student_t));
+    if (w != (ssize_t)sizeof(student_t)) {
+        printf(M_ERR_DB_WRITE);
+        return ERR_DB_FILE;
+    }
+
+    printf(M_STD_ADDED, id);
+    return NO_ERROR;
 }
+
+
 
 /*
  *  del_student
@@ -216,7 +196,7 @@ int del_student(int fd, int id)
         if (lseek(fd, offset, SEEK_SET) != -1){
             ssize_t n = write(fd, &EMPTY_STUDENT_RECORD, sizeof(student_t));
             if (n == sizeof(student_t)){
-                printf(M_STD_DEL_MSG);
+                printf(M_STD_DEL_MSG, id);
                 return NO_ERROR;
             }
             else{
@@ -349,7 +329,7 @@ int print_db(int fd)
         //check if record is not empty
         if (memcmp(&student_record, &EMPTY_STUDENT_RECORD, sizeof(student_t)) != 0){
             if (!header_printed){
-                printf(STUDENT_PRINT_HDR_STRING, "ID", "FIRST NAME", "LAST NAME", "GPA");
+                printf(STUDENT_PRINT_HDR_STRING, "ID", "FIRST_NAME", "LAST_NAME", "GPA");
                 header_printed = true;
             }
             float gpa_float = student_record.gpa / 100.0;
@@ -380,7 +360,7 @@ int print_db(int fd)
  *  student data:
  *
  *     printf(STUDENT_PRINT_HDR_STRING, "ID",
- *                  "FIRST NAME", "LAST_NAME", "GPA");
+ *                  "FIRST_NAME", "LAST_NAME", "GPA");
  *
  *     printf(STUDENT_PRINT_FMT_STRING, s->id, s->fname,
  *                    student.lname, calculated_gpa_from_s);
@@ -404,7 +384,7 @@ void print_student(student_t *s)
         return;
     }
 
-    printf(STUDENT_PRINT_HDR_STRING, "ID", "FIRST NAME", "LAST NAME", "GPA");
+    printf(STUDENT_PRINT_HDR_STRING, "ID", "FIRST_NAME", "LAST_NAME", "GPA");
     float gpa_float = s->gpa / 100.0;
     printf(STUDENT_PRINT_FMT_STRING, s->id, s->fname, s->lname, gpa_float);
     //printf(M_NOT_IMPL);
