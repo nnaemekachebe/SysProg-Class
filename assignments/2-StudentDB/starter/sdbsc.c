@@ -115,6 +115,10 @@ int get_student(int fd, int id, student_t *s)
  */
 int add_student(int fd, int id, char *fname, char *lname, int gpa)
 {
+    off_t end = (off_t)MAX_STD_ID * sizeof(student_t) -1;
+    lseek(fd, end, SEEK_SET);
+    write(fd, "", 1);
+
     off_t offset = (off_t)(id - 1) * sizeof(student_t);
 
     if (lseek(fd, offset, SEEK_SET) == (off_t)-1) {
@@ -133,18 +137,18 @@ int add_student(int fd, int id, char *fname, char *lname, int gpa)
         return ERR_DB_FILE;
     }
 
-    // If slot already occupied -> duplicate
+    
     if (n == (ssize_t)sizeof(student_t) &&
         memcmp(&cur, &EMPTY_STUDENT_RECORD, sizeof(student_t)) != 0) {
         printf(M_ERR_DB_ADD_DUP, id);
         return ERR_DB_OP;
     }
 
-    student_t s = EMPTY_STUDENT_RECORD; // ensures zero-fill
+    student_t s = EMPTY_STUDENT_RECORD;
     s.id = id;
     s.gpa = gpa;
-    strncpy(s.fname, fname, sizeof(s.fname) - 1);
-    strncpy(s.lname, lname, sizeof(s.lname) - 1);
+    strncpy(s.fname, fname, sizeof(s.fname) );
+    strncpy(s.lname, lname, sizeof(s.lname) );
 
     if (lseek(fd, offset, SEEK_SET) == (off_t)-1) {
         printf(M_ERR_DB_READ);
@@ -440,13 +444,87 @@ void print_student(student_t *s)
  */
 int compress_db(int fd)
 {
-    // TODO
+    // 1) Create/truncate temp DB using the provided helper
+    int tfd = open_db(TMP_DB_FILE, true);
+    if (tfd < 0) {
+        // open_db already printed M_ERR_DB_OPEN
+        return ERR_DB_FILE;
+    }
 
-    
+    // 2) Ensure temp DB has correct logical size (sparse file)
+    off_t end = (off_t)MAX_STD_ID * (off_t)sizeof(student_t) - 1;
+    if (lseek(tfd, end, SEEK_SET) == (off_t)-1) {
+        printf(M_ERR_DB_READ);
+        close(tfd);
+        return ERR_DB_FILE;
+    }
+    if (write(tfd, "", 1) != 1) {
+        printf(M_ERR_DB_WRITE);
+        close(tfd);
+        return ERR_DB_FILE;
+    }
 
-    //printf(M_NOT_IMPL);
-    //return fd;
+    // 3) Read original DB from the beginning
+    if (lseek(fd, 0, SEEK_SET) == (off_t)-1) {
+        printf(M_ERR_DB_READ);
+        close(tfd);
+        return ERR_DB_FILE;
+    }
+
+    student_t rec;
+    ssize_t n;
+
+    while ((n = read(fd, &rec, sizeof(student_t))) > 0) {
+        if (n != (ssize_t)sizeof(student_t)) {
+            printf(M_ERR_DB_READ);
+            close(tfd);
+            return ERR_DB_FILE;
+        }
+
+        // Skip empty/deleted records
+        if (memcmp(&rec, &EMPTY_STUDENT_RECORD, sizeof(student_t)) == 0)
+            continue;
+
+        // Write valid record back to its ID slot in the temp DB
+        off_t off = (off_t)(rec.id - 1) * (off_t)sizeof(student_t);
+        if (lseek(tfd, off, SEEK_SET) == (off_t)-1) {
+            printf(M_ERR_DB_READ);
+            close(tfd);
+            return ERR_DB_FILE;
+        }
+        if (write(tfd, &rec, sizeof(student_t)) != (ssize_t)sizeof(student_t)) {
+            printf(M_ERR_DB_WRITE);
+            close(tfd);
+            return ERR_DB_FILE;
+        }
+    }
+
+    if (n < 0) {
+        printf(M_ERR_DB_READ);
+        close(tfd);
+        return ERR_DB_FILE;
+    }
+
+    // 4) Replace DB with temp DB
+    close(fd);
+    close(tfd);
+
+    if (rename(TMP_DB_FILE, DB_FILE) != 0) {
+        printf(M_ERR_DB_CREATE);
+        return ERR_DB_FILE;
+    }
+
+    // 5) Reopen DB and return fd to caller
+    int newfd = open_db(DB_FILE, false);
+    if (newfd < 0) {
+        // open_db already printed M_ERR_DB_OPEN
+        return ERR_DB_FILE;
+    }
+
+    printf(M_DB_COMPRESSED_OK);
+    return newfd;
 }
+
 
 /*
  *  validate_range

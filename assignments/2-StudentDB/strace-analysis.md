@@ -31,7 +31,7 @@ You've implemented a database using Linux system calls (open, read, write, lseek
 - It's the definitive way to debug system-level behavior
 - Essential for understanding performance and correctness
 
-**Professional reality:**
+**Professiaonal reality:**
 - Every systems programmer uses `strace` for debugging
 - It's the standard tool for tracing system calls
 - You'll use it throughout your career for systems troubleshooting
