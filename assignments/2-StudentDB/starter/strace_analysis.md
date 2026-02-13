@@ -38,14 +38,46 @@ write(1, "Student 1 added to database.\n", 29) = 29
 +++ exited with 0 +++
 
 **Explanation for each system call**
+According to ChatGPT, the commands
+'
+close(3)                                = 0
+read(3, "\177ELF\2\1\1\3\0\0\0\0\0\0\0\0\3\0\267\0\1\0\0\0\360\206\2\0\0\0\0\0"..., 832) = 832
+close(3)
+'
+
+are from the ELF(Executable and Linkable Format), which is the OS reading an exectuable/shared library file, so these are not a part of the main function.
+
+
 lseek(3, 6399999, SEEK_SET)             = 6399999
 
 Moves the file pointer to the last byte of the database(which is MAX_STD_ID * sizeof(student_t) -1)
 write(3, "\0", 1)                       = 1
 Writes one byte at the end to make sure the file size is 6400000
 
+lseek(3, 0, SEEK_SET)                   = 0
+Go to the start of the file
 
+read(3, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 64) = 64
 
+Read 64 bytes and see whats in the slot 1
+
+lseek(3, 0, SEEK_SET) = 0
+Goes back to the beginninng of the slot so that the unpoming write overwrites it
+
+write(3, "\1\0\0\0john\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0doe\0"..., 64) = 64
+
+Writes the 64-byte student_t record for ID 1
+
+close(3)                                = 0
+Closes the database
+
+write(1, "Student 1 added to database.\n", 29) = 29
+Writes the success message to stdout (fd 1)
+
++++ exited with 0 +++
+Program returned with exit code 0
+
+Based on these analyses, the sixes of lseek and write have been verified to be correct
 
 
 #### B. Reading/Printing a Student
@@ -82,6 +114,90 @@ write(1, "\t-z:  zero db file (remove all r"..., 40     -z:  zero db file (remov
 ) = 40
 close(3)                                = 0
 +++ exited with 2 +++
+
+**Analysis**
+
+close(3)                                = 0
+read(3, "\177ELF\2\1\1\3\0\0\0\0\0\0\0\0\3\0\267\0\1\0\0\0\360\206\2\0\0\0\0\0"..., 832) = 832
+close(3) 
+
+Same as the previous part, this is the startup code for the ELF files
+
+write(1, "usage: ./sdbsc -[h|a|c|d|f|p|z] "..., 49usage: ./sdbsc -[h|a|c|d|f|p|z] options.  Where:
+) = 49
+write(1, "\t-h:  prints help\n", 18     -h:  prints help
+)    = 18
+write(1, "\t-a id first_name last_name gpa("..., 65     -a id first_name last_name gpa(as 3 digit int):  adds a student
+) = 65
+write(1, "\t-c:  counts the records in the "..., 41     -c:  counts the records in the database
+) = 41
+write(1, "\t-d id:  deletes a student\n", 27    -d id:  deletes a student
+) = 27
+write(1, "\t-f id:  finds and prints a stud"..., 52     -f id:  finds and prints a student in the database
+) = 52
+write(1, "\t-p:  prints all records in the "..., 49     -p:  prints all records in the student database
+) = 49
+write(1, "\t-x:  compress the database file"..., 48     -x:  compress the database file [EXTRA CREDIT]
+) = 48
+write(1, "\t-z:  zero db file (remove all r"..., 40     -z:  zero db file (remove all records)
+) = 40
+
+This is writing to stdout the correct usage of this function, essentially stating that the commands are being run the wrong way. -g is the wrong flag
+
+close(3)                                = 0
++++ exited with 2 +++
+
+This closes the file
+And exits with code two, which correlates to EXIT_FAIL_ARGS
+
+Now, running this with the right code would look like this:
+
+(.venv) nnaemekaachebe@ubuntu-24-class:~/git-and-github-nnaemekachebe/SysProg-Class/assignments/2-StudentDB/starter$ strace -e trace=open,lseek,read,write,close ./sdbsc -f 1
+close(3)                                = 0
+read(3, "\177ELF\2\1\1\3\0\0\0\0\0\0\0\0\3\0\267\0\1\0\0\0\360\206\2\0\0\0\0\0"..., 832) = 832
+close(3)                                = 0
+lseek(3, 0, SEEK_SET)                   = 0
+read(3, "\1\0\0\0john\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0doe\0"..., 64) = 64
+write(1, "ID     FIRST_NAME               "..., 69ID     FIRST_NAME               LAST_NAME                        GPA
+) = 69
+write(1, "1      john                     "..., 701      john                     doe                              3.45
+) = 70
+close(3)                                = 0
++++ exited with 0 +++
+
+close(3)                                = 0
+read(3, "\177ELF\2\1\1\3\0\0\0\0\0\0\0\0\3\0\267\0\1\0\0\0\360\206\2\0\0\0\0\0"..., 832) = 832
+close(3)
+
+This is the startup with the ELF files
+
+lseek(3, 0, SEEK_SET)                   = 0
+read(3, "\1\0\0\0john\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0doe\0"..., 64) = 64
+
+3 is the file of interest here, which is the student database
+
+lseek goes to the beginning of the file
+The read command reads the data in that slot up to 64 bits
+
+fd points to stdout
+
+write(1, "ID     FIRST_NAME               "..., 69ID     FIRST_NAME               LAST_NAME                        GPA
+) = 69
+write(1, "1      john                     "..., 701      john                     doe                              3.45
+) = 70
+
+This is the output that is displayed in stdout(or the terminal)
+
+close(3)                                = 0
++++ exited with 0 +++
+
+the file (the database) is closed and exited normally with no errors
+
+Normal/expected behavior is verified
+
+
+
+
 
 
 
