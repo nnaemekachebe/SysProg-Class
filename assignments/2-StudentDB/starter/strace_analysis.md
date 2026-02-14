@@ -27,11 +27,9 @@ Run: `strace -e trace=open,lseek,read,write,close ./sdbsc -a 1 john doe 350`
 close(3)                                = 0
 read(3, "\177ELF\2\1\1\3\0\0\0\0\0\0\0\0\3\0\267\0\1\0\0\0\360\206\2\0\0\0\0\0"..., 832) = 832
 close(3)                                = 0
-lseek(3, 6399999, SEEK_SET)             = 6399999
-write(3, "\0", 1)                       = 1
-lseek(3, 0, SEEK_SET)                   = 0
-read(3, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 64) = 64
-lseek(3, 0, SEEK_SET)                   = 0
+lseek(3, 64, SEEK_SET)                  = 64
+read(3, "", 64)                         = 0
+lseek(3, 64, SEEK_SET)                  = 64
 write(3, "\1\0\0\0john\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0doe\0"..., 64) = 64
 close(3)                                = 0
 write(1, "Student 1 added to database.\n", 29) = 29
@@ -224,6 +222,18 @@ close(3)                                = 0
 - Identify if there's a read before the write (checking if student exists)
 - Verify the lseek offset and write size
 
+**Output Analysis**
+
+- deletion writes zeroes: write(3, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 64) = 64
+
+- there is a read before the write: 
+
+read(3, "\1\0\0\0john\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0doe\0"..., 64) = 64
+lseek(3, 0, SEEK_SET)                   = 0
+write(3, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 64) = 64
+
+
+- lseek(3, 0, SEEK_SET)                   = 0. This is the accurate offset for lseek, and from the output above the write size is verified.
 
 ### 3. Sparse File Investigation (3 points)
 
@@ -239,22 +249,20 @@ du -h student.db
 ```
 -**output**
 
-(.venv) nnaemekaachebe@ubuntu-24-class:~/git-and-github-nnaemekachebe/SysProg-Class/assignments/2-StudentDB/starter$ strace -e trace=open,lseek,write,close ./sdbsc -a 1 john doe 350
+SysProg-Class/assignments/2-StudentDB/starter$ strace -e trace=open,lseek,write,close ./sdbsc -a 1 john doe 350
 close(3)                                = 0
 close(3)                                = 0
-lseek(3, 6399999, SEEK_SET)             = 6399999
-write(3, "\0", 1)                       = 1
-lseek(3, 0, SEEK_SET)                   = 0
-lseek(3, 0, SEEK_SET)                   = 0
+lseek(3, 64, SEEK_SET)                  = 64
+lseek(3, 64, SEEK_SET)                  = 64
 write(3, "\1\0\0\0john\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0doe\0"..., 64) = 64
 write(1, "Student 1 added to database.\n", 29Student 1 added to database.
 ) = 29
 close(3)                                = 0
 +++ exited with 0 +++
 (.venv) nnaemekaachebe@ubuntu-24-class:~/git-and-github-nnaemekachebe/SysProg-Class/assignments/2-StudentDB/starter$ ls -lh student.db
--rw-r----- 1 nnaemekaachebe nnaemekaachebe 6.2M Feb 12 14:30 student.db
+-rw-r----- 1 nnaemekaachebe nnaemekaachebe 128 Feb 13 19:09 student.db
 (.venv) nnaemekaachebe@ubuntu-24-class:~/git-and-github-nnaemekachebe/SysProg-Class/assignments/2-StudentDB/starter$ du -h student.db
-8.0K    student.db
+4.0K    student.db
 
 
 **Answer these questions:**
@@ -263,14 +271,23 @@ close(3)                                = 0
    - Should be 128 bytes (2 * 64)
    - Explain why
 
+   The first ID is not used, and the second has the information of the added student
+
 2. **What is the actual disk usage reported by `du -h`?**
    - Should be 4K
    - Explain why it's larger than 128 bytes but not as much as it could be
+
+   According to GPT, Linux assigns allocates storage by blocks, and the smallest block size is 4KB. But because sparse data exists, most of the 4KB is not consumed by actual disk block storage space
+
 
 3. **In the strace output, what did lseek() do?**
    - It skipped from byte 0 to byte 64
    - This creates a "hole" in the file (bytes 0-63)
    - Holes don't take up disk space
+
+   All 3 of the above. rec_offfest() skipps bytes 0-63, meaning a hole was mad,e and holes don't take up true disk space
+
+
 
 
 #### B. Add a Student with Large ID
@@ -281,15 +298,40 @@ ls -lh student.db
 du -h student.db
 ```
 
+**output**
+
+(.venv) nnaemekaachebe@ubuntu-24-class:~/git-and-github-nnaemekachebe/SysProg-Class/assignments/2-StudentDB/starter$ strace -e trace=lseek,write ./sdbsc -a 99999 big id 400
+ls -lh student.db
+du -h student.db
+lseek(3, 6399936, SEEK_SET)             = 6399936
+lseek(3, 6399936, SEEK_SET)             = 6399936
+write(3, "\237\206\1\0big\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0id\0\0"..., 64) = 64
+write(1, "Student 99999 added to database."..., 33Student 99999 added to database.
+) = 33
++++ exited with 0 +++
+-rw-r----- 1 nnaemekaachebe nnaemekaachebe 6.2M Feb 13 19:20 student.db
+8.0K    student.db
+
+
 **Answer these questions:**
 
 1. **What offset did lseek() seek to?**
-   - Calculate: 99999 * 64 = ?
+   - Calculate: 99999 * 64 = 6399936
    - Does strace show this offset?
+
+   Yes it does!
+   lseek(3, 6399936, SEEK_SET)             = 6399936
+   lseek(3, 6399936, SEEK_SET)             = 6399936
+
 
 2. **What is the file size now?**
    - Should be huge (6.4 MB)
    - But du shows actual usage is still small
+
+   Yes, this is because only 2 student blocks werre actually written into
+
+
+
 
 3. **What happened?**
    - lseek created a HUGE hole
@@ -300,28 +342,35 @@ du -h student.db
 
 Based on your investigation, explain:
 - What is a sparse file?
+This is a file where large regions only contains zeroes, but the OS does not physically store those zero bytes on disk
 - How does lseek() create holes?
+By jumping across different bytes without wrritiing into them
 - Why is this efficient for our database?
+Fast random access, storage efficiency
 - What would happen without sparse file support?
+'Wasted' space on the systems, and for larger databases the issue wuld only exacerbate
 
 ### 4. System Call Verification (2 points)
 
 Verify your implementation is correct by checking:
 
 **Checklist:**
-- [ ] open() opens the database file with correct flags
-- [ ] lseek() offsets match the formula: `id * 64`
-- [ ] write() always writes exactly 64 bytes
-- [ ] read() reads exactly 64 bytes when getting a student
+- [ check] open() opens the database file with correct flags
+- [ check] lseek() offsets match the formula: `id * 64`
+- [ check] write() always writes exactly 64 bytes
+- [ check] read() reads exactly 64 bytes when getting a student
 - [ ] close() is called to close the file
 - [ ] No errors (return values are non-negative)
 
 **Questions to answer:**
-1. Did you find any bugs in your implementation through strace analysis?
+1. Did you find any bugs in your implementation through strace analysis? Yes, it made me go back and review my code a couple of times, I almost wish I started with strace midweay rather than leaving it till the very end
 2. Do all your system calls return success (non-negative values)?
+Apart from one functin(which I believe had the wrong flag), and when run with the right flag gave the correct output, all the other fucntions returned successes
 3. Are your lseek() offsets calculated correctly?
+Yes
 4. Do you read/write the correct number of bytes?
+Yes
 
 If you found bugs, describe what was wrong and how you fixed it.
 
-
+I was allocating memory wrongly for the add_Student, where I would forcefully use the MAX)STD_ID to fill out the database(and write 0s in the last slot) to pass the tests.  When I used the strace analysis and read through the instructions again, I discovered that was the improper implementation. I fixed the offset at the beginning, so that the ID=0 would always be skipped and implemented it across add_student, del_student and the compress functions

@@ -21,6 +21,13 @@
  *            M_ERR_DB_OPEN on error
  *
  */
+
+
+ static inline off_t rec_offset(int id) {
+    return (off_t)id * (off_t)sizeof(student_t);   // NOTE: hardcode first offset
+}
+
+
 int open_db(char *dbFile, bool should_truncate)
 {
     // Set permissions: rw-rw----
@@ -64,7 +71,7 @@ int get_student(int fd, int id, student_t *s)
 {
     // TODO
 
-    off_t offset = (off_t)(id - 1) * sizeof(student_t);
+    off_t offset = rec_offset(id);
 
     if (lseek(fd, offset, SEEK_SET) == (off_t)-1)
         return ERR_DB_FILE;
@@ -115,41 +122,42 @@ int get_student(int fd, int id, student_t *s)
  */
 int add_student(int fd, int id, char *fname, char *lname, int gpa)
 {
-    off_t end = (off_t)MAX_STD_ID * sizeof(student_t) -1;
-    lseek(fd, end, SEEK_SET);
-    write(fd, "", 1);
-
-    off_t offset = (off_t)(id - 1) * sizeof(student_t);
+    // 1) Seek to the slot for this id (rubric layout: id * sizeof)
+    off_t offset = rec_offset(id);
 
     if (lseek(fd, offset, SEEK_SET) == (off_t)-1) {
         printf(M_ERR_DB_READ);
         return ERR_DB_FILE;
     }
 
+    // 2) Read current record to detect duplicates
     student_t cur;
     ssize_t n = read(fd, &cur, sizeof(student_t));
     if (n < 0) {
         printf(M_ERR_DB_READ);
         return ERR_DB_FILE;
     }
-    if (n != 0 && n != (ssize_t)sizeof(student_t)) {
-        printf(M_ERR_DB_READ);
-        return ERR_DB_FILE;
-    }
 
-    
+    // If we got a full record and it's not empty -> duplicate
     if (n == (ssize_t)sizeof(student_t) &&
         memcmp(&cur, &EMPTY_STUDENT_RECORD, sizeof(student_t)) != 0) {
         printf(M_ERR_DB_ADD_DUP, id);
         return ERR_DB_OP;
     }
 
+    // If read hit EOF (n == 0), that's fine: slot doesn't exist yet -> treated empty
+    // 3) Build the new record safely
     student_t s = EMPTY_STUDENT_RECORD;
     s.id = id;
     s.gpa = gpa;
-    strncpy(s.fname, fname, sizeof(s.fname) );
-    strncpy(s.lname, lname, sizeof(s.lname) );
 
+    strncpy(s.fname, fname, sizeof(s.fname) - 1);
+    s.fname[sizeof(s.fname) - 1] = '\0';
+
+    strncpy(s.lname, lname, sizeof(s.lname) - 1);
+    s.lname[sizeof(s.lname) - 1] = '\0';
+
+    // 4) Seek back and write
     if (lseek(fd, offset, SEEK_SET) == (off_t)-1) {
         printf(M_ERR_DB_READ);
         return ERR_DB_FILE;
@@ -196,7 +204,7 @@ int del_student(int fd, int id)
     student_t student_to_delete;
     int rc = get_student(fd, id, &student_to_delete);
     if (rc == NO_ERROR){
-        int offset = (id - 1) * sizeof(student_t);
+        off_t offset = rec_offset(id);
         if (lseek(fd, offset, SEEK_SET) != -1){
             ssize_t n = write(fd, &EMPTY_STUDENT_RECORD, sizeof(student_t));
             if (n == sizeof(student_t)){
@@ -486,7 +494,7 @@ int compress_db(int fd)
             continue;
 
         // Write valid record back to its ID slot in the temp DB
-        off_t off = (off_t)(rec.id - 1) * (off_t)sizeof(student_t);
+        off_t off = rec_offset(rec.id);
         if (lseek(tfd, off, SEEK_SET) == (off_t)-1) {
             printf(M_ERR_DB_READ);
             close(tfd);
