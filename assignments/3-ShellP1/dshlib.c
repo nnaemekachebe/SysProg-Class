@@ -81,123 +81,173 @@ int free_cmd_list(command_list_t *cmd_lst)
 //===================================================================
 
 /**
+ * trim_whitespace - Helper function to trim leading and trailing whitespace
+ */
+static char *trim_whitespace(char *str)
+{
+    char *end;
+    
+    // Trim leading space
+    while (isspace((unsigned char)*str)) str++;
+    
+    if (*str == 0) return str;
+    
+    // Trim trailing space
+    end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end)) end--;
+    
+    // Write new null terminator
+    end[1] = '\0';
+    
+    return str;
+}
+
+/**
  * build_cmd_buff - Parse a single command string into cmd_buff_t
- * 
- * YOU NEED TO IMPLEMENT THIS FUNCTION!
- * 
- * This function takes a single command string (no pipes) and parses
- * it into argc/argv format.
- * 
- * Steps:
- *   1. Copy cmd_line into cmd_buff->_cmd_buffer
- *   2. Split the string by spaces into tokens
- *   3. Store each token pointer in cmd_buff->argv[]
- *   4. Set cmd_buff->argc to number of tokens
- *   5. Ensure cmd_buff->argv[argc] is NULL (required for execvp later)
- * 
- * Example:
- *   Input:  "ls -la /tmp"
- *   Output: argc=3, argv=["ls", "-la", "/tmp", NULL]
- * 
- * Hints:
- *   - Use strcpy() to copy cmd_line to _cmd_buffer
- *   - Use strtok() to split by spaces
- *   - Remember to trim leading/trailing whitespace
- *   - Handle multiple consecutive spaces
- * 
- * @param cmd_line: Command string to parse
- * @param cmd_buff: Allocated cmd_buff_t to populate
- * @return: OK on success, error code on failure
  */
 int build_cmd_buff(char *cmd_line, cmd_buff_t *cmd_buff)
 {
-    // TODO: Implement this function
-    // For now, return an error to indicate it's not implemented
-    return ERR_MEMORY;
+    // Allocate internal buffer
+    if (alloc_cmd_buff(cmd_buff) != OK) {
+        return ERR_MEMORY;
+    }
+    
+    // Copy cmd_line to internal buffer (strtok modifies the string)
+    strncpy(cmd_buff->_cmd_buffer, cmd_line, SH_CMD_MAX - 1);
+    cmd_buff->_cmd_buffer[SH_CMD_MAX - 1] = '\0';
+    
+    // Trim whitespace from the command
+    char *trimmed = trim_whitespace(cmd_buff->_cmd_buffer);
+    
+    // Parse tokens with quote handling
+    int argc = 0;
+    char *p = trimmed;
+    
+    while (*p && argc < CMD_ARGV_MAX - 1) {
+        // Skip leading spaces
+        while (*p && *p == ' ') p++;
+        if (!*p) break;
+        
+        // Check for quotes
+        char quote_char = 0;
+        if (*p == '"' || *p == '\'') {
+            quote_char = *p;
+            p++;  // Skip opening quote
+        }
+        
+        // Find end of token
+        char *token_start = p;
+        if (quote_char) {
+            // Find closing quote
+            while (*p && *p != quote_char) p++;
+            // Remove closing quote if found
+            if (*p == quote_char) *p++ = '\0';
+        } else {
+            // Find space or end
+            while (*p && *p != ' ') p++;
+            if (*p) *p++ = '\0';
+        }
+        
+        // Store token
+        cmd_buff->argv[argc] = token_start;
+        argc++;
+    }
+    
+    // NULL terminate the argv array (required for execvp)
+    cmd_buff->argv[argc] = NULL;
+    cmd_buff->argc = argc;
+    
+    return OK;
 }
 
 /**
  * build_cmd_list - Parse command line with pipes into command_list_t
- * 
- * YOU NEED TO IMPLEMENT THIS FUNCTION! This is the main parsing function.
- * 
- * This function:
- *   1. Checks if input is empty/whitespace only
- *   2. Splits input by pipe character '|'
- *   3. For each segment, creates a cmd_buff_t
- *   4. Stores all cmd_buffs in command_list_t
- * 
- * Algorithm:
- *   1. Trim leading/trailing whitespace from cmd_line
- *   2. If empty, return WARN_NO_CMDS
- *   3. Count pipe characters
- *      - If count > CMD_MAX-1, return ERR_TOO_MANY_COMMANDS
- *   4. Split cmd_line by '|' character
- *      - For each segment:
- *        a. Allocate cmd_buff using alloc_cmd_buff()
- *        b. Parse segment using build_cmd_buff()
- *        c. Store in clist->commands[i]
- *   5. Set clist->num to number of commands
- *   6. Return OK
- * 
- * Example inputs and outputs:
- * 
- *   Input:  "cmd"
- *   Output: num=1, commands[0]={argc=1, argv=["cmd", NULL]}
- * 
- *   Input:  "cmd arg1 arg2"
- *   Output: num=1, commands[0]={argc=3, argv=["cmd", "arg1", "arg2", NULL]}
- * 
- *   Input:  "cmd1 | cmd2"
- *   Output: num=2, 
- *           commands[0]={argc=1, argv=["cmd1", NULL]}
- *           commands[1]={argc=1, argv=["cmd2", NULL]}
- * 
- *   Input:  "ls | grep txt | wc -l"
- *   Output: num=3,
- *           commands[0]={argc=1, argv=["ls", NULL]}
- *           commands[1]={argc=2, argv=["grep", "txt", NULL]}
- *           commands[2]={argc=2, argv=["wc", "-l", NULL]}
- * 
- * Error cases:
- *   Input:  ""  or "   "
- *   Return: WARN_NO_CMDS
- * 
- *   Input:  "c1|c2|c3|c4|c5|c6|c7|c8|c9"  (9 commands)
- *   Return: ERR_TOO_MANY_COMMANDS
- * 
- * Hints:
- *   - Use strchr() to find pipe characters
- *   - Use strtok() with PIPE_STRING to split by pipes
- *   - Remember to trim spaces around each command segment
- *   - Don't forget to set clist->num!
- *   - Call alloc_cmd_buff() for each command before build_cmd_buff()
- * 
- * Standard library functions you might use:
- *   - strlen(), strcpy(), strcmp()
- *   - strtok(), strchr()
- *   - isspace(), isalpha()
- * 
- * @param cmd_line: Full command line from user input
- * @param clist: Command list to populate
- * @return: OK on success, error code on failure
  */
 int build_cmd_list(char *cmd_line, command_list_t *clist)
 {
-    // TODO: Implement this function
-    // This is the main function you need to implement for Part 1
+    // Check for NULL input
+    if (cmd_line == NULL) {
+        return WARN_NO_CMDS;
+    }
     
-    // Suggested approach:
-    // 1. Check if cmd_line is empty or all whitespace
-    // 2. Count pipe characters to ensure <= CMD_MAX-1
-    // 3. Use strtok to split by PIPE_CHAR
-    // 4. For each segment:
-    //    - Allocate cmd_buff
-    //    - Call build_cmd_buff
-    //    - Store in clist->commands[]
-    // 5. Set clist->num
+    // Make a copy since strtok modifies the string
+    char *cmd_copy = malloc(strlen(cmd_line) + 1);
+    if (cmd_copy == NULL) {
+        return ERR_MEMORY;
+    }
+    strcpy(cmd_copy, cmd_line);
     
-    return ERR_MEMORY;  // Placeholder - replace with your implementation
+    // Trim leading/trailing whitespace from input
+    char *trimmed = trim_whitespace(cmd_copy);
+    
+    // Check if empty or all whitespace
+    if (strlen(trimmed) == 0) {
+        free(cmd_copy);
+        return WARN_NO_CMDS;
+    }
+    
+    // Initialize command list
+    clist->num = 0;
+    
+    // First pass: count pipe characters to check limit
+    int pipe_count = 0;
+    char *p = trimmed;
+    while ((p = strchr(p, PIPE_CHAR)) != NULL) {
+        pipe_count++;
+        p++;
+    }
+    
+    // Check if too many commands (CMD_MAX commands means CMD_MAX-1 pipes)
+    if (pipe_count >= CMD_MAX) {
+        free(cmd_copy);
+        return ERR_TOO_MANY_COMMANDS;
+    }
+    
+    // Reset for second pass - copy original again
+    strcpy(cmd_copy, cmd_line);
+    trimmed = trim_whitespace(cmd_copy);
+    
+    // Tokenize by pipe character
+    char *saveptr;
+    char *cmd_segment = strtok_r(trimmed, PIPE_STRING, &saveptr);
+    
+    while (cmd_segment != NULL && clist->num < CMD_MAX) {
+        // Trim leading/trailing whitespace from each segment
+        char *trimmed_segment = trim_whitespace(cmd_segment);
+        
+        // Allocate cmd_buff for this command
+        if (alloc_cmd_buff(&clist->commands[clist->num]) != OK) {
+            // Free already allocated commands
+            for (int i = 0; i < clist->num; i++) {
+                free_cmd_buff(&clist->commands[i]);
+            }
+            free(cmd_copy);
+            return ERR_MEMORY;
+        }
+        
+        // Parse the segment
+        if (build_cmd_buff(trimmed_segment, &clist->commands[clist->num]) != OK) {
+            for (int i = 0; i <= clist->num; i++) {
+                free_cmd_buff(&clist->commands[i]);
+            }
+            free(cmd_copy);
+            return ERR_MEMORY;
+        }
+        
+        clist->num++;
+        
+        // Get next segment
+        cmd_segment = strtok_r(NULL, PIPE_STRING, &saveptr);
+    }
+    
+    free(cmd_copy);
+    
+    // Check if we have any commands
+    if (clist->num == 0) {
+        return WARN_NO_CMDS;
+    }
+    
+    return OK;
 }
 
 //===================================================================
@@ -358,8 +408,65 @@ Built_In_Cmds exec_built_in_cmd(cmd_buff_t *cmd)
  */
 int exec_local_cmd_loop()
 {
-    // TODO: Implement this function
-    // See detailed comments above for guidance
+    char cmd_line[SH_CMD_MAX];
+    command_list_t clist;
+    int rc;
+    
+    while (1) {
+        // Print prompt
+        printf("%s", SH_PROMPT);
+        
+        // Read input
+        if (fgets(cmd_line, SH_CMD_MAX, stdin) == NULL) {
+            printf("\n");
+            break;
+        }
+        
+        // Remove trailing newline
+        cmd_line[strcspn(cmd_line, "\n")] = '\0';
+        
+        // Check for exit command
+        if (strcmp(cmd_line, EXIT_CMD) == 0) {
+            printf("exiting...\n");
+            break;
+        }
+        
+        // Parse the command line
+        rc = build_cmd_list(cmd_line, &clist);
+        
+        // Handle return codes and print output
+        if (rc == OK) {
+            // Print header
+            printf(CMD_OK_HEADER, clist.num);
+            
+            // Print each command
+            for (int i = 0; i < clist.num; i++) {
+                printf("<%d> %s", i + 1, clist.commands[i].argv[0]);
+                
+                // Print arguments if present
+                if (clist.commands[i].argc > 1) {
+                    printf(" [");
+                    for (int j = 1; j < clist.commands[i].argc; j++) {
+                        printf("%s", clist.commands[i].argv[j]);
+                        if (j < clist.commands[i].argc - 1) {
+                            printf(" ");
+                        }
+                    }
+                    printf("]");
+                }
+                printf("\n");
+            }
+            
+            // Free memory
+            free_cmd_list(&clist);
+        }
+        else if (rc == WARN_NO_CMDS) {
+            printf(CMD_WARN_NO_CMD);
+        }
+        else if (rc == ERR_TOO_MANY_COMMANDS) {
+            printf(CMD_ERR_PIPE_LIMIT, CMD_MAX);
+        }
+    }
     
     return OK;
 }

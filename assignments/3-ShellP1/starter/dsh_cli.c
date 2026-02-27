@@ -99,23 +99,45 @@ int main()
     int rc = 0;
     command_list_t clist;
 
-    // TODO allocate memory for cmd_buff
+    // Allocate memory for cmd_buff
+    cmd_buff = malloc(SH_CMD_MAX);
+    if (cmd_buff == NULL) {
+        return ERR_CMD_OR_ARGS_TOO_BIG;
+    }
 
     while(1){
-        // TODO print prompt and fgets input
+        // Print prompt and fgets input
+        printf("%s", SH_PROMPT);
+        if (fgets(cmd_buff, SH_CMD_MAX, stdin) == NULL){
+            printf("\n");
+            break;
+        }
+        
+        // Remove \n from cmd_buff
+        cmd_buff[strcspn(cmd_buff, "\n")] = '\0';
 
-        // TODO remove \n from cmd_buff
-
-        // TODO if exit command, exit return code 0
-
-        // TODO optional extra credit - print dragon if dragon command
+        // If exit command, exit return code 0
+        if (strcmp(cmd_buff, EXIT_CMD) == 0) {
+            printf("exiting...\n");
+            break;
+        }
 
         rc = build_cmd_list(cmd_buff, &clist);
 
         if (rc == OK){
-            // TODO print CMD_OK_HEADER with number of commands
+            // Print CMD_OK_HEADER with number of commands
+            printf(CMD_OK_HEADER, clist.num);
 
-            // TODO loop over commands and print command and arguments using formatting in "sample run" above in comments
+            // Loop over commands and print command and arguments using formatting
+            for (int i = 0; i < clist.num; i++) {
+                printf("<%d> %s", i + 1, clist.commands[i].exe);
+                
+                // Print arguments if present
+                if (strlen(clist.commands[i].args) > 0) {
+                    printf(" [%s]", clist.commands[i].args);
+                }
+                printf("\n");
+            }
         }
 
         if (rc == WARN_NO_CMDS){
@@ -127,5 +149,10 @@ int main()
         }
     }
 
-    // TODO don't forget to free cmd_buff
+    // Free cmd_buff
+    free(cmd_buff);
+    
+    printf("cmd loop returned %d\n", OK);
+    return OK;
 }
+
