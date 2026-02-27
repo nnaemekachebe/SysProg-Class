@@ -81,168 +81,215 @@ int free_cmd_list(command_list_t *cmd_lst)
 //===================================================================
 
 /**
- * trim_whitespace - Helper function to trim leading and trailing whitespace
+ * Helper function to trim leading and trailing whitespace
  */
 static char *trim_whitespace(char *str)
 {
-    char *end;
+    while (isspace((unsigned char)*str)) {
+        str++;
+    }
     
-    // Trim leading space
-    while (isspace((unsigned char)*str)) str++;
+    if (*str == '\0') {
+        return str;
+    }
     
-    if (*str == 0) return str;
+    char *end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end)) {
+        end--;
+    }
     
-    // Trim trailing space
-    end = str + strlen(str) - 1;
-    while (end > str && isspace((unsigned char)*end)) end--;
-    
-    // Write new null terminator
-    end[1] = '\0';
-    
+    *(end + 1) = '\0';
     return str;
 }
 
 /**
  * build_cmd_buff - Parse a single command string into cmd_buff_t
+ * 
+ * This function takes a single command string (no pipes) and parses
+ * it into argc/argv format. It handles quoted strings to preserve
+ * spaces within them.
  */
 int build_cmd_buff(char *cmd_line, cmd_buff_t *cmd_buff)
 {
-    // Allocate internal buffer
-    if (alloc_cmd_buff(cmd_buff) != OK) {
+    // Check for NULL inputs
+    if (cmd_line == NULL || cmd_buff == NULL) {
         return ERR_MEMORY;
     }
     
-    // Copy cmd_line to internal buffer (strtok modifies the string)
-    strncpy(cmd_buff->_cmd_buffer, cmd_line, SH_CMD_MAX - 1);
+    // Trim leading/trailing whitespace from input
+    char *trimmed = trim_whitespace(cmd_line);
+    
+    // Check if empty after trimming
+    if (*trimmed == '\0') {
+        cmd_buff->argc = 0;
+        return OK;
+    }
+    
+    // Copy the trimmed string to the internal buffer
+    strncpy(cmd_buff->_cmd_buffer, trimmed, SH_CMD_MAX - 1);
     cmd_buff->_cmd_buffer[SH_CMD_MAX - 1] = '\0';
     
-    // Trim whitespace from the command
-    char *trimmed = trim_whitespace(cmd_buff->_cmd_buffer);
-    
-    // Parse tokens with quote handling
+    // Parse the command line into tokens with quote handling
     int argc = 0;
-    char *p = trimmed;
+    char *buffer = cmd_buff->_cmd_buffer;
+    int input_len = strlen(buffer);
+    int pos = 0;
     
-    while (*p && argc < CMD_ARGV_MAX - 1) {
-        // Skip leading spaces
-        while (*p && *p == ' ') p++;
-        if (!*p) break;
-        
-        // Check for quotes
-        char quote_char = 0;
-        if (*p == '"' || *p == '\'') {
-            quote_char = *p;
-            p++;  // Skip opening quote
+    while (argc < CMD_ARGV_MAX - 1 && pos < input_len) {
+        // Skip whitespace
+        while (pos < input_len && (buffer[pos] == ' ' || buffer[pos] == '\t')) {
+            pos++;
         }
         
-        // Find end of token
-        char *token_start = p;
-        if (quote_char) {
+        if (pos >= input_len) {
+            break;
+        }
+        
+        // Check for quoted strings
+        char *arg_start;
+        
+        if (buffer[pos] == '"') {
+            // Double-quoted string
+            pos++; // Skip opening quote
+            arg_start = &buffer[pos];
+            
             // Find closing quote
-            while (*p && *p != quote_char) p++;
-            // Remove closing quote if found
-            if (*p == quote_char) *p++ = '\0';
+            while (pos < input_len && buffer[pos] != '"') {
+                pos++;
+            }
+            
+            // Null-terminate at closing quote
+            if (pos < input_len) {
+                buffer[pos] = '\0';
+                pos++; // Skip closing quote
+            }
+        } else if (buffer[pos] == '\'') {
+            // Single-quoted string
+            pos++; // Skip opening quote
+            arg_start = &buffer[pos];
+            
+            // Find closing quote
+            while (pos < input_len && buffer[pos] != '\'') {
+                pos++;
+            }
+            
+            // Null-terminate at closing quote
+            if (pos < input_len) {
+                buffer[pos] = '\0';
+                pos++; // Skip closing quote
+            }
         } else {
-            // Find space or end
-            while (*p && *p != ' ') p++;
-            if (*p) *p++ = '\0';
+            // Regular argument - find end
+            arg_start = &buffer[pos];
+            while (pos < input_len && buffer[pos] != ' ' && buffer[pos] != '\t') {
+                pos++;
+            }
+            
+            // Null-terminate at end of argument
+            if (pos < input_len) {
+                buffer[pos] = '\0';
+                pos++;
+            }
         }
         
-        // Store token
-        cmd_buff->argv[argc] = token_start;
+        // Store the argument
+        cmd_buff->argv[argc] = arg_start;
         argc++;
     }
     
-    // NULL terminate the argv array (required for execvp)
-    cmd_buff->argv[argc] = NULL;
+    // Set argc and NULL terminate the argv array
     cmd_buff->argc = argc;
+    cmd_buff->argv[argc] = NULL;
     
     return OK;
 }
 
 /**
  * build_cmd_list - Parse command line with pipes into command_list_t
+ * 
+ * This function:
+ *   1. Checks if input is empty/whitespace only
+ *   2. Splits input by pipe character '|'
+ *   3. For each segment, creates a cmd_buff_t
+ *   4. Stores all cmd_buffs in command_list_t
  */
 int build_cmd_list(char *cmd_line, command_list_t *clist)
 {
-    // Check for NULL input
-    if (cmd_line == NULL) {
+    // Check for NULL inputs
+    if (cmd_line == NULL || clist == NULL) {
         return WARN_NO_CMDS;
     }
     
-    // Make a copy since strtok modifies the string
-    char *cmd_copy = malloc(strlen(cmd_line) + 1);
+    // Trim leading/trailing whitespace
+    char *trimmed = trim_whitespace(cmd_line);
+    
+    // Check if empty after trimming
+    if (*trimmed == '\0') {
+        clist->num = 0;
+        return WARN_NO_CMDS;
+    }
+    
+    // Make a copy of the input since strtok modifies the string
+    char *cmd_copy = malloc(strlen(trimmed) + 1);
     if (cmd_copy == NULL) {
         return ERR_MEMORY;
     }
-    strcpy(cmd_copy, cmd_line);
+    strcpy(cmd_copy, trimmed);
     
-    // Trim leading/trailing whitespace from input
-    char *trimmed = trim_whitespace(cmd_copy);
-    
-    // Check if empty or all whitespace
-    if (strlen(trimmed) == 0) {
-        free(cmd_copy);
-        return WARN_NO_CMDS;
-    }
-    
-    // Initialize command list
-    clist->num = 0;
-    
-    // First pass: count pipe characters to check limit
+    // Count pipe characters to check for too many commands
     int pipe_count = 0;
-    char *p = trimmed;
+    char *p = cmd_copy;
     while ((p = strchr(p, PIPE_CHAR)) != NULL) {
         pipe_count++;
         p++;
     }
     
-    // Check if too many commands (CMD_MAX commands means CMD_MAX-1 pipes)
+    // Check if too many commands (more than CMD_MAX)
     if (pipe_count >= CMD_MAX) {
         free(cmd_copy);
+        clist->num = 0;
         return ERR_TOO_MANY_COMMANDS;
     }
     
-    // Reset for second pass - copy original again
-    strcpy(cmd_copy, cmd_line);
-    trimmed = trim_whitespace(cmd_copy);
+    // Initialize command list
+    clist->num = 0;
     
-    // Tokenize by pipe character
-    char *saveptr;
-    char *cmd_segment = strtok_r(trimmed, PIPE_STRING, &saveptr);
+    // Split by pipe character
+    char *saveptr;  // For strtok_r
+    char *segment = strtok_r(cmd_copy, "|", &saveptr);
     
-    while (cmd_segment != NULL && clist->num < CMD_MAX) {
-        // Trim leading/trailing whitespace from each segment
-        char *trimmed_segment = trim_whitespace(cmd_segment);
+    while (segment != NULL && clist->num < CMD_MAX) {
+        // Trim whitespace from this segment
+        char *trimmed_segment = trim_whitespace(segment);
         
         // Allocate cmd_buff for this command
-        if (alloc_cmd_buff(&clist->commands[clist->num]) != OK) {
-            // Free already allocated commands
-            for (int i = 0; i < clist->num; i++) {
-                free_cmd_buff(&clist->commands[i]);
-            }
+        int rc = alloc_cmd_buff(&clist->commands[clist->num]);
+        if (rc != OK) {
+            free_cmd_list(clist);
             free(cmd_copy);
             return ERR_MEMORY;
         }
         
-        // Parse the segment
-        if (build_cmd_buff(trimmed_segment, &clist->commands[clist->num]) != OK) {
-            for (int i = 0; i <= clist->num; i++) {
-                free_cmd_buff(&clist->commands[i]);
-            }
+        // Parse the segment into cmd_buff
+        rc = build_cmd_buff(trimmed_segment, &clist->commands[clist->num]);
+        if (rc != OK) {
+            free_cmd_list(clist);
             free(cmd_copy);
-            return ERR_MEMORY;
+            return rc;
         }
         
-        clist->num++;
+        // Only count non-empty commands
+        if (clist->commands[clist->num].argc > 0) {
+            clist->num++;
+        }
         
         // Get next segment
-        cmd_segment = strtok_r(NULL, PIPE_STRING, &saveptr);
+        segment = strtok_r(NULL, "|", &saveptr);
     }
     
     free(cmd_copy);
     
-    // Check if we have any commands
+    // Handle empty command list
     if (clist->num == 0) {
         return WARN_NO_CMDS;
     }
@@ -251,16 +298,17 @@ int build_cmd_list(char *cmd_line, command_list_t *clist)
 }
 
 //===================================================================
-// BUILT-IN COMMAND FUNCTIONS (PROVIDED FOR PART 1)
+// BUILT-IN COMMAND FUNCTIONS
 //===================================================================
 
 /**
  * match_command - Check if input is a built-in command
- * 
- * This function is provided for you.
  */
 Built_In_Cmds match_command(const char *input)
 {
+    if (input == NULL) {
+        return BI_NOT_BI;
+    }
     if (strcmp(input, EXIT_CMD) == 0) {
         return BI_CMD_EXIT;
     }
@@ -273,14 +321,57 @@ Built_In_Cmds match_command(const char *input)
     return BI_NOT_BI;
 }
 
+// Dragon ASCII art - Extra Credit
+static const char *dragon_art[] = {
+"                                                                        @%%%%                       ",
+"                                                                     %%%%%%                         ",
+"                                                                    %%%%%%                          ",
+"                                                                 % %%%%%%%           @              ",
+"                                                                %********%        %*******           ",
+"                                       %%%%%%%  %%%%@         %***********@    %******  @****        ",
+"                                  %*********************      ************************          ",
+"                                *************************   *********** ****************           ",
+"                               ****************************** ********************     ***            ",
+"                             ******************************* @*******************        **            ",
+"                            ********************************** %***********************                ",
+"                            *************************************************************               ",
+"                            **********************************@*******@              ",
+"      %*******@           %**************        ******************************      **                ",
+"    **************         %%@*************           ************ **************      @%                ",
+"  ***********   ***        ***************            ****************************                        ",
+" **********       *         **************             ***********@***************                        ",
+"**********                * %*************            @******************************                      ",
+"*********                 * *@*************            @**********************************                  ",
+"*******@                   ***************           %*********************************              ",
+"**********                  ***************          %**********************************      ****   ",
+"*********@                   @**************         ************@ **** %****************   *********",
+"**********                  *****************        **************      ****************** *********",
+"*********@**@                ***************@       ***************     ***********************  **",
+" **********                  * %***************@        **************   ************************** **",
+"  ************  @           *******************        ****************************************  *** ",
+"   ************** **  %  %@ *******************          **************************************    *** ",
+"    ************************** ******************           @*******************************    ****** ",
+"     ***************************************              %*******************************        ***  ",
+"      @***********************************                  %***************************               ",
+"        **********************************                      ********************  *******          ",
+"           **************************                           **************@ **********         ",
+"              ********************           @%@%                  @*******************   ***        ",
+"                  **************        **********                    ***************    %         ",
+"                ************************************                      **************            ",
+"                **************************  %%%% ***                      **********  ***@          ",
+"                     ******************* %***** %%                          ************@          ",
+"                                                                                 %*******@       "
+};
+
 /**
  * exec_built_in_cmd - Execute built-in commands
- * 
- * This function is provided for you, but incomplete.
- * You can add dragon command here for extra credit.
  */
 Built_In_Cmds exec_built_in_cmd(cmd_buff_t *cmd)
 {
+    if (cmd == NULL || cmd->argv[0] == NULL) {
+        return BI_NOT_BI;
+    }
+    
     Built_In_Cmds bi_cmd = match_command(cmd->argv[0]);
     
     switch (bi_cmd) {
@@ -289,8 +380,10 @@ Built_In_Cmds exec_built_in_cmd(cmd_buff_t *cmd)
             return BI_CMD_EXIT;
             
         case BI_CMD_DRAGON:
-            // TODO: Extra credit - implement dragon here
-            printf("Dragon not implemented yet!\n");
+            // Extra credit - print the dragon
+            for (int i = 0; i < (int)(sizeof(dragon_art) / sizeof(dragon_art[0])); i++) {
+                printf("%s\n", dragon_art[i]);
+            }
             return BI_EXECUTED;
             
         case BI_CMD_CD:
@@ -310,101 +403,17 @@ Built_In_Cmds exec_built_in_cmd(cmd_buff_t *cmd)
 /**
  * exec_local_cmd_loop - Main shell loop
  * 
- * YOU NEED TO IMPLEMENT THIS FUNCTION! This is your shell's main loop.
- * 
- * This function should:
+ * This function:
  *   1. Loop forever (while(1))
  *   2. Print the shell prompt (SH_PROMPT)
  *   3. Read a line of input using fgets()
  *   4. Remove trailing newline
  *   5. Check for exit command - if found, print "exiting..." and break
  *   6. Parse the command line using build_cmd_list()
- *   7. Handle return codes:
- *      - WARN_NO_CMDS: print CMD_WARN_NO_CMD
- *      - ERR_TOO_MANY_COMMANDS: print CMD_ERR_PIPE_LIMIT with CMD_MAX
- *      - OK: print the parsed commands (see below)
- *   8. Free the command list using free_cmd_list()
- *   9. Loop back to step 2
- * 
- * Output format when commands are parsed successfully:
- * 
- *   First line:
- *     printf(CMD_OK_HEADER, clist.num);
- * 
- *   For each command:
- *     printf("<%d> %s", i+1, clist.commands[i].argv[0]);
- *     if (clist.commands[i].argc > 1) {
- *         printf(" [");
- *         for (int j = 1; j < clist.commands[i].argc; j++) {
- *             printf("%s", clist.commands[i].argv[j]);
- *             if (j < clist.commands[i].argc - 1) {
- *                 printf(" ");
- *             }
- *         }
- *         printf("]");
- *     }
- *     printf("\n");
- * 
- * Examples of expected output:
- * 
- *   dsh> cmd
- *   PARSED COMMAND LINE - TOTAL COMMANDS 1
- *   <1> cmd
- * 
- *   dsh> cmd arg1 arg2
- *   PARSED COMMAND LINE - TOTAL COMMANDS 1
- *   <1> cmd [arg1 arg2]
- * 
- *   dsh> cmd1 | cmd2 | cmd3
- *   PARSED COMMAND LINE - TOTAL COMMANDS 3
- *   <1> cmd1
- *   <2> cmd2
- *   <3> cmd3
- * 
- *   dsh> 
- *   warning: no commands provided
- * 
- *   dsh> c1|c2|c3|c4|c5|c6|c7|c8|c9
- *   error: piping limited to 8 commands
- * 
- *   dsh> exit
- *   exiting...
- * 
- * Starter code to help you get going:
- * 
- *   char cmd_line[SH_CMD_MAX];
- *   command_list_t clist;
- *   int rc;
- *   
- *   while (1) {
- *       printf("%s", SH_PROMPT);
- *       
- *       if (fgets(cmd_line, SH_CMD_MAX, stdin) == NULL) {
- *           printf("\n");
- *           break;
- *       }
- *       
- *       // Remove trailing newline
- *       cmd_line[strcspn(cmd_line, "\n")] = '\0';
- *       
- *       // Check for exit command
- *       // TODO: implement exit check
- *       
- *       // Parse the command line
- *       rc = build_cmd_list(cmd_line, &clist);
- *       
- *       // Handle return codes and print output
- *       // TODO: implement return code handling
- *       
- *       // Free memory
- *       if (rc == OK) {
- *           free_cmd_list(&clist);
- *       }
- *   }
- *   
- *   return OK;
- * 
- * @return: OK on success
+ *   7. Handle return codes appropriately
+ *   8. Print the parsed commands in required format
+ *   9. Free the command list using free_cmd_list()
+ *   10. Loop back to step 2
  */
 int exec_local_cmd_loop()
 {
@@ -413,11 +422,12 @@ int exec_local_cmd_loop()
     int rc;
     
     while (1) {
-        // Print prompt
+        // Print the shell prompt
         printf("%s", SH_PROMPT);
         
-        // Read input
+        // Read a line of input
         if (fgets(cmd_line, SH_CMD_MAX, stdin) == NULL) {
+            // EOF received (Ctrl+D)
             printf("\n");
             break;
         }
@@ -431,41 +441,53 @@ int exec_local_cmd_loop()
             break;
         }
         
+        // Check for dragon command (extra credit)
+        if (strcmp(cmd_line, "dragon") == 0) {
+            // Execute dragon command
+            for (int i = 0; i < (int)(sizeof(dragon_art) / sizeof(dragon_art[0])); i++) {
+                printf("%s\n", dragon_art[i]);
+            }
+            continue;
+        }
+        
         // Parse the command line
         rc = build_cmd_list(cmd_line, &clist);
         
-        // Handle return codes and print output
-        if (rc == OK) {
-            // Print header
-            printf(CMD_OK_HEADER, clist.num);
-            
-            // Print each command
-            for (int i = 0; i < clist.num; i++) {
-                printf("<%d> %s", i + 1, clist.commands[i].argv[0]);
-                
-                // Print arguments if present
-                if (clist.commands[i].argc > 1) {
-                    printf(" [");
-                    for (int j = 1; j < clist.commands[i].argc; j++) {
-                        printf("%s", clist.commands[i].argv[j]);
-                        if (j < clist.commands[i].argc - 1) {
-                            printf(" ");
-                        }
-                    }
-                    printf("]");
-                }
-                printf("\n");
-            }
-            
-            // Free memory
-            free_cmd_list(&clist);
-        }
-        else if (rc == WARN_NO_CMDS) {
-            printf(CMD_WARN_NO_CMD);
-        }
-        else if (rc == ERR_TOO_MANY_COMMANDS) {
+        // Handle return codes
+        if (rc == WARN_NO_CMDS) {
+            printf("%s", CMD_WARN_NO_CMD);
+            continue;
+        } else if (rc == ERR_TOO_MANY_COMMANDS) {
             printf(CMD_ERR_PIPE_LIMIT, CMD_MAX);
+            continue;
+        } else if (rc != OK) {
+            // Other error - just continue
+            continue;
         }
+        
+        // Print the parsed commands in required format
+        printf(CMD_OK_HEADER, clist.num);
+        
+        // Print each command
+        for (int i = 0; i < clist.num; i++) {
+            printf("<%d> %s", i + 1, clist.commands[i].argv[0]);
+            
+            // If there are arguments, print them in brackets
+            if (clist.commands[i].argc > 1) {
+                printf(" [");
+                for (int j = 1; j < clist.commands[i].argc; j++) {
+                    printf("%s", clist.commands[i].argv[j]);
+                    if (j < clist.commands[i].argc - 1) {
+                        printf(" ");
+                    }
+                }
+                printf("]");
+            }
+            printf("\n");
+        }
+        
+        // Free memory
+        free_cmd_list(&clist);
     }
     
     return OK;
@@ -477,22 +499,21 @@ int exec_local_cmd_loop()
 
 /**
  * exec_cmd - Execute a single command (Part 2)
- * 
- * This will be implemented in Part 2 using fork/exec
  */
 int exec_cmd(cmd_buff_t *cmd)
 {
+    (void)cmd;  // Suppress unused parameter warning
     printf("exec_cmd not implemented yet (Part 2)\n");
     return OK;
 }
 
 /**
  * execute_pipeline - Execute piped commands (Part 3)
- * 
- * This will be implemented in Part 3 using pipes
  */
 int execute_pipeline(command_list_t *clist)
 {
+    (void)clist;  // Suppress unused parameter warning
     printf("execute_pipeline not implemented yet (Part 3)\n");
     return OK;
 }
+
