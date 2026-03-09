@@ -1,278 +1,639 @@
-## Remote Drexel Shell
+# Assignment: Custom Shell Part 4 - Remote Shell
 
-This work builds on your previous shell version that executed commands and supported pipes.  Except this time, we will enable the shell program to be executed over a network.  To do this we will enhance our `dsh` executable to accept some parameters.  Specifically, `dsh` should mirror the behavior of the piped version of your shell, performing local `fork/exec` to run commands, including built-in commands.  However, `dsh_cli.c` has been enhanced to support additional command line arguments:
+This week we will add **network capability** to our `dsh` Drexel Shell, allowing you to run a shell server that accepts commands from remote clients over TCP!
 
-```bash
-#start dsh in server mode
-./dsh -s 
-#note you can override:
-# -i:  Overrides default interface, e.g., -i 127.0.0.1
-# -p:  Overrides default port, e.g., -p 5678
+## What is a Remote Shell?
+
+A remote shell allows you to execute commands on a remote machine over a network. This is fundamental to systems administration - tools like `ssh`, `telnet`, and remote desktop all use similar client-server architectures.
+
+In this assignment, you'll build:
+- **Server mode:** Accepts client connections, executes commands, sends back results
+- **Client mode:** Connects to server, sends commands, displays results
+- **Local mode:** Works like Parts 1-3 (for testing)
+
+## Network Architecture
+
+```
+┌─────────────────┐                  ┌─────────────────┐
+│     Client      │                  │     Server      │
+│                 │                  │                 │
+│  ./dsh -c       │──── TCP/IP ─────▶│  ./dsh -s       │
+│                 │                  │                 │
+│  User types:    │                  │  Receives:      │
+│  > ls           │──send("ls\0")──▶│  "ls\0"         │
+│                 │                  │  Executes: ls   │
+│  Displays:      │◀───send(data)────│  Sends output:  │
+│  file1.txt      │                  │  "file1.txt...  │
+│  file2.txt      │◀───send(EOF)─────│  ...file2.txt"  │
+│                 │                  │  EOF (0x04)     │
+└─────────────────┘                  └─────────────────┘
 ```
 
-The starter code provides information and defaults for both the `interfaces` argument as well as a default `port`.  Note that server interfaces are specified in terms of IP addresses, and almost always we use the value of `0.0.0.0` for the server to indicate that the server should bind on all available network interfaces. 
+**Key concepts:**
+- Client connects using IP address and port
+- Commands sent as null-terminated strings
+- Results sent back as stream with EOF marker (0x04)
+- Server can handle multiple clients sequentially
 
-```bash
-# start dsh in client mode
-./dsh -c 
-#note like server-mode you can override:
-# -i:  Overrides default ip address of the server, e.g., -i 129.25.203.107
-# -p:  Overrides default port, e.g., -p 5678
-```
-In client mode, the `dsh` shell will connect to the server and send it commands.  The IP address of the server and port can be provided if the default options require changing.  Note that the defaults will work well - for example `dsh -s` to start the server and `dsh -c` to start the client if you are running in a local VM; however, the defaults might not work if you are running on tux as others might be using the default port number for this program of `1234`.  If you are running on tux an example configuration might look like:
+---
 
-```bash
-#start the server on tux, use port 7890
-./dsh -s -i 0.0.0.0 -p 7890
+## TCP Socket Programming
 
-#start the client to connect to tux, assuming tux's IP
-#address is 129.25.203.107 and the server is running
-#on port number 7890
-./dsh -c -i 129.25.203.107 -p 7890
-```
-
-#### A cautionary tale about network I/O
-We will be using the TCP/IP protocol, which is a **stream** protocol.  This means that TCP/IP sends bytes in streams.  There is no corresponding indication of where a logical stream begins and a logical stream ends.  Consider you send the command `ls` in a single send to the server.  Its possible that the server will receive `ls\0`, `ls`, or `l` on a receive.  In other words, the network might break up sends into multiple receives.  You must handle this yourself when receiving data over the network.
-
-There are many techniques to handle managing a logical stream.  We will consider the easiest technique that involves using a special character to mark the end of a logical stream, and then loop `recv()` calls until we receive the character that we expect.  
-
-For the remote dsh program we will use the null byte `\0` as our end of stream delimiters for requests sent by the dsh client to the server.  On the way back we will use the ASCII code 0x04 or EOF character to indicate the end of the stream. We defined `RDSH_EOF_CHAR` in `rshlib.h` as follows:  
+### Server-Side Flow
 
 ```c
-static const char RDSH_EOF_CHAR = 0x04;  
+// 1. Create socket
+int svr_sock = socket(AF_INET, SOCK_STREAM, 0);
+
+// 2. Bind to address/port
+struct sockaddr_in addr = {
+    .sin_family = AF_INET,
+    .sin_port = htons(port),
+    .sin_addr.s_addr = INADDR_ANY
+};
+bind(svr_sock, (struct sockaddr*)&addr, sizeof(addr));
+
+// 3. Listen for connections
+listen(svr_sock, 20);
+
+// 4. Accept client connection
+int cli_sock = accept(svr_sock, NULL, NULL);
+
+// 5. Communicate with client
+recv(cli_sock, buffer, size, 0);  // Receive command
+send(cli_sock, result, len, 0);   // Send result
+
+// 6. Close client socket
+close(cli_sock);
 ```
 
-**THIS MEANS THAT YOU WILL BE RESPONSIBLE FOR CORRECTLY NOT ONLY SENDING DATA BUT ENSURING THAT THE DATA YOU SEND ENDS WITH THE APPROPRIATE END OF STREAM CHARACTER**
-
-Some pseudo-code is below for how to handle this:
+### Client-Side Flow
 
 ```c
-//Sending a stream that is null terminated
-char *cmd = "ls -l"
-int  send_len = strlen(cmd) + 1;    //the +1 includes the NULL byte
-int  bytes_sent;
+// 1. Create socket
+int cli_sock = socket(AF_INET, SOCK_STREAM, 0);
 
-//send the command including the null byte
-bytes_sent = send(sock, cmd, send_len, 0);
-```
+// 2. Connect to server
+struct sockaddr_in addr = {
+    .sin_family = AF_INET,
+    .sin_port = htons(port),
+    .sin_addr.s_addr = inet_addr(server_ip)
+};
+connect(cli_sock, (struct sockaddr*)&addr, sizeof(addr));
 
-```c
-//Receiving a stream that is null terminated
-char *buff;
-int  recv_size;         //the +1 includes the NULL byte
-int  is_last_chunk;     //boolean to see if this is the last chunk
-char eof_char = '\0';   //using the null character in this demo, however
-                        //you can set this to RDSH_EOF_CHAR, which is
-                        //0x04, or the linux EOF character.  We define
-                        //RDSH_EOF_CHAR for you in rshlib.h.  For example,
-                        //if all we would need to do is to change:
-                        //
-                        // char eof_char = '\0'; to
-                        // char eof_char = RDSH_EOF_CHAR;
-                        //
-                        // to handle the stream of data that the server will
-                        // send back to the client.
+// 3. Send command
+send(cli_sock, "ls\0", 3, 0);
 
-//note that RDSH_COMM_BUFF_SZ is a constant that we provide in rshlib.h
-buff = malloc(RDSH_COMM_BUFF_SZ);
-
-//send the command including the null byte
-while ((recv_size= recv(socket, buff, RDSH_COMM_BUFF_SZ,0)) > 0){
-    //we got recv_size bytes
-    if (recv_size < 0){
-        //we got an error, handle it and break out of loop or return
-        //from function
-    }
-    if (recv_size == 0){
-        //we received zero bytes, this often happens when we are waiting for
-        //the other side of the connection to send, but they close the socket
-        //for now lets just assume the other side went away and break out of
-        //the loop or return from the function
-    }
-
-    //At this point we have some data, lets see if this is the last chunk
-    is_last_chunk = ((char)buff[recv_size-1] == eof_char) ? 1 : 0;
-
-    if (is_last_chunk){
-        buff[recv_size-1] = '\0'; //remove the marker and replace with a null
-                                  //this makes string processing easier
-    }
-
-    //Now the data in buff is guaranteed to be null-terminated.  Handle in,
-    //in our shell client we will just be printing it out. Note that we are
-    //using a special printf marker "%.*s" that will print out the characters
-    //until it encounters a null byte or prints out a max of recv_size
-    //characters, whatever happens first. 
-    printf("%.*s", (int)recv_size, buff);
-
-    //If we are not at the last chunk, loop back and receive some more, if it
-    //is the last chunk break out of the loop
-    if (is_last_chunk)
-        break;
+// 4. Receive results (loop until EOF)
+while (recv(cli_sock, buffer, size, 0) > 0) {
+    // Check for EOF marker (0x04)
+    if (buffer[bytes-1] == 0x04) break;
 }
 
-//NORMAL PROCESSING CONTINUES HERE
+// 5. Close socket
+close(cli_sock);
 ```
 
-In our final example, we will demonstrate how to just sent the `EOF` character. You will need this in your server.  Your server will do the traditional `fork/exec` pattern and you will `dup` `stdin`, `stdout`, and `stderr` to the socket you are using for communications.  This means that everything you `exec` will go back over the socket to the client until the command finishes executing.  However, the client will not know that the server is done until the server does one final send, sending the `EOF` character.  Remember this character is defined in `rshlib.h` as RDSH_EOF_CHAR.
+---
+
+## Protocol Design
+
+### Message Format
+
+**Client → Server:**
+- Null-terminated C strings
+- Example: `"ls -la\0"`
+- Each command is one send()
+
+**Server → Client:**
+- Stream of data (no message boundaries in TCP!)
+- Ends with EOF character (0x04)
+- May take multiple recv() calls to get all data
+
+**Example protocol exchange:**
+```
+Client: send("echo hello\0")
+Server: recv() → "echo hello\0"
+Server: executes echo hello
+Server: send("hello\n")
+Server: send("\x04")          ← EOF marker
+Client: recv() → "hello\n\x04"
+Client: sees EOF, stops receiving
+```
+
+### Why EOF Marker?
+
+TCP is a **stream** protocol - it has no concept of message boundaries. If the server sends:
+```c
+send(sock, "hello\n", 6, 0);
+```
+
+The client might receive it as:
+- One recv: `"hello\n"` ✓
+- Two recvs: `"hel"` then `"lo\n"` 
+- Combined with next: `"hello\nworld\n"`
+
+We use `0x04` (ASCII EOF) as a delimiter to mark message end!
+
+---
+
+## Redirecting I/O to Socket
+
+The server redirects command output to the socket using `dup2()`:
 
 ```c
-//Demo function to just send the eof
-int send_eof(int socket){
-    int bytes_sent;
+// In child process after fork:
+dup2(cli_socket, STDIN_FILENO);   // stdin from socket
+dup2(cli_socket, STDOUT_FILENO);  // stdout to socket
+dup2(cli_socket, STDERR_FILENO);  // stderr to socket
+execvp("ls", argv);               // ls writes to socket!
+```
 
-    //send one character, the EOF character.
-    bytes_sent = send(socket, &RDSH_EOF_CHAR, 1, 0);
-    if (bytes_sent == 1){
-        //this is what is expected, we sent a single character,
-        //the EOF character, so we can return a good error code.
-        //we use OK for this as defined in dshlib.h
-        return OK;
-    }
-    
+**For pipelines:**
+- First command: stdin from socket
+- Last command: stdout/stderr to socket
+- Middle commands: pipes like Part 3
 
-    //handle error and send back an appropriate error code
-    //if bytes_sent < 0 that would indicate a network error
-    //if it equals zero it indicates the character could not
-    //be sent, which is also an error.  I could not imagine a
-    //situation where bytes_sent > 1 since we told send to 
-    //send exactly one byte, but if this happens it would also
-    //be an error.
+```
+Socket ──→ cmd1 ─pipe─→ cmd2 ─pipe─→ cmd3 ──→ Socket
+```
 
-    //Ill just return a generic COMMUNICATION error we defined
-    //for you in rshlib.h, but you can return different error
-    //codes for different conditions if you want. 
-    return ERR_RDSH_COMMUNICATION;
+---
+
+## Assignment Details
+
+### Step 1 - Review [./rshlib.h](./rshlib.h)
+
+Key constants and definitions:
+- `RDSH_DEF_PORT` (1234) - default port
+- `RDSH_COMM_BUFF_SZ` (64KB) - buffer size
+- `RDSH_EOF_CHAR` (0x04) - message delimiter
+- Error codes: `ERR_RDSH_*`
+- Function prototypes
+
+**Prompt changed to "dsh4>"** to indicate Part 4.
+
+---
+
+### Step 2 - Implement Client Functions in [./rsh_cli.c](./rsh_cli.c)
+
+#### A. `start_client(server_ip, port)`
+
+Creates client socket and connects to server.
+
+**Algorithm:**
+```c
+1. Create socket: socket(AF_INET, SOCK_STREAM, 0)
+2. Setup address structure with server_ip and port
+3. Connect: connect(cli_sock, &addr, sizeof(addr))
+4. Return cli_sock on success
+```
+
+**System calls:**
+- `socket()` - create socket
+- `connect()` - connect to server
+
+#### B. `exec_remote_cmd_loop(server_ip, port)`
+
+Main client loop - sends commands and receives results.
+
+**Algorithm:**
+```c
+1. Allocate buffers (malloc)
+2. Call start_client() to get cli_sock
+3. While loop:
+   a. Print prompt
+   b. Read command with fgets()
+   c. Send command: send(cli_sock, cmd, len, 0)
+   d. Receive results in loop:
+      - recv(cli_sock, buffer, size, 0)
+      - Print received data
+      - Check last byte for EOF (0x04)
+      - If EOF, break recv loop
+   e. Check for "exit" or "stop-server"
+4. Close socket and free buffers
+```
+
+**Key points:**
+- Send entire command including null terminator
+- Loop on recv() until you see EOF marker
+- Print using: `printf("%.*s", bytes_received, buffer)`
+- Exit on "exit" command, stop server on "stop-server"
+
+---
+
+### Step 3 - Implement Server Functions in [./rsh_server.c](./rsh_server.c)
+
+#### A. `boot_server(ifaces, port)`
+
+Creates, binds, and starts listening on server socket.
+
+**Algorithm:**
+```c
+1. Create socket: socket(AF_INET, SOCK_STREAM, 0)
+2. Set SO_REUSEADDR option (helps with development)
+3. Setup address structure with ifaces and port
+4. Bind: bind(svr_sock, &addr, sizeof(addr))
+5. Listen: listen(svr_sock, 20)
+6. Return svr_sock
+```
+
+**Tip:** Use `setsockopt()` with `SO_REUSEADDR` before bind!
+
+#### B. `process_cli_requests(svr_socket)`
+
+Accept clients in loop, handle each connection.
+
+**Algorithm:**
+```c
+while (1) {
+    1. Accept connection: cli_sock = accept(svr_sock, NULL, NULL)
+    2. Call exec_client_requests(cli_sock)
+    3. If return code is negative (stop-server), break
+    4. Otherwise loop to accept next client
 }
 ```
 
-#### Directions
+#### C. `exec_client_requests(cli_socket)`
 
-Now that we have provided an overview of what we are looking for we can turn to specific directions for this assignment including an overview of the starter code that we provide.
+Receive commands from client, execute, send results back.
 
-Files provided in the starter:
+**Algorithm:**
+```c
+while (1) {
+    1. Allocate command buffer
+    2. Receive command: recv(cli_sock, cmd_buf, size, 0)
+    3. If recv returns <= 0, client disconnected, break
+    4. Parse command into command_list_t
+    5. Check for built-ins:
+       - "exit" → send EOF, close client, return OK
+       - "stop-server" → send EOF, return OK_EXIT (negative)
+       - "cd" → execute chdir(), send message
+    6. If not built-in:
+       - Call rsh_execute_pipeline(cli_sock, &clist)
+       - Send EOF marker
+    7. Free buffers and loop
+}
+```
 
-| File | Description |
-| --- | --- |
-| dsh_cli.c | You should not need to modify this file but you should understand it.  It accepts command line args to start `dsh` in stand-alone mode, client-mode, or server-mode. |
-| dshlib.h | This file is largely unchanged from the last assignment.  The shell prompt has been bumped to `dsh4>` |
-| dshlib.c | We provide an empty starter for this file.  This file should be replaced with the code you wrote in `5-ShellP3`. It assumes that local shell execution runs via the `exec_local_cmd_loop()` command. No other changes are required - reuse the submission of your last assignment as-is!|
-| rshlib.h | This header file shows key constants and prototypes needed for the remote shell implementation.  There are comments in this file to highlight what they are used for |
-| rsh_cli.c | The implementation of the remote shell client.  The client should start executing via the `exec_remote_cmd_loop(server_ip_address, port)` function. There is significant documentation in the starter to get you going. |
-| rsh_server.c | The implementation of the remote shell server.  The server should start executing via the `start_server(server_interfaces, port)` function. There is significant documentation in the starter to get you going. |
+#### D. `send_message_string(cli_socket, message)`
 
-This version of `dsh` has the following options, which can be viewed by executing `dsh -h`
+Send a string message followed by EOF.
 
+**Algorithm:**
+```c
+1. Send message: send(cli_sock, message, strlen(message), 0)
+2. Send EOF: send_message_eof(cli_sock)
+```
+
+#### E. `send_message_eof(cli_socket)`
+
+Send EOF marker to signal end of transmission.
+
+**Algorithm:**
+```c
+1. char eof = RDSH_EOF_CHAR;  // 0x04
+2. send(cli_sock, &eof, 1, 0);
+```
+
+#### F. `rsh_execute_pipeline(cli_socket, command_list)`
+
+Execute commands with socket as stdin/stdout/stderr.
+
+**This is like Part 3 execute_pipeline(), but:**
+- First command: `dup2(cli_socket, STDIN_FILENO)` for stdin
+- Last command: `dup2(cli_socket, STDOUT_FILENO)` for stdout/stderr
+- Last command: `dup2(cli_socket, STDERR_FILENO)` for stderr too
+
+**Algorithm:**
+```c
+1. Create N-1 pipes for N commands
+2. Fork each command:
+   a. If first command (i==0):
+      - dup2(cli_socket, STDIN_FILENO)
+   b. If not first command:
+      - dup2(pipe[i-1][0], STDIN_FILENO)
+   c. If not last command:
+      - dup2(pipe[i][1], STDOUT_FILENO)
+   d. If last command (i==N-1):
+      - dup2(cli_socket, STDOUT_FILENO)
+      - dup2(cli_socket, STDERR_FILENO)
+   e. Close all pipes
+   f. execvp()
+3. Parent closes all pipes
+4. Wait for all children
+5. Return exit code of last command
+```
+
+---
+
+### Step 4 - Network Protocol Analysis
+
+**Points: 10 (REQUIRED)**
+
+Once your remote shell works, analyze the network protocol using tools to understand TCP communication at a deep level.
+
+**What You'll Do:**
+1. Use AI tools to learn network protocol analysis
+2. Analyze your client-server communication
+3. Understand TCP streams, send/recv, and protocol design
+4. Document your findings and learning process
+
+**Why This Matters:**
+- **Understand network protocols**: See how applications communicate
+- **TCP stream behavior**: No message boundaries
+- **Professional skill**: Essential for network programming
+- **Validates implementation**: Verify your protocol works correctly
+
+**Deliverable:**
+Create a file `network-protocol-analysis.md` following the detailed instructions in [network-protocol-analysis.md](network-protocol-analysis.md).
+
+**What You'll Analyze:**
+- TCP connection establishment (3-way handshake)
+- send() and recv() system calls
+- Message fragmentation and reassembly
+- EOF marker for message delimiting
+- Protocol correctness
+
+See [network-protocol-analysis.md](network-protocol-analysis.md) for complete instructions.
+
+---
+
+### Sample Run
+
+**Start server:**
 ```bash
-Usage: ./dsh [-c | -s] [-i IP] [-p PORT] [-x] [-h]
-  Default is to run ./dsh in local mode
-  -c            Run as client
-  -s            Run as server
-  -i IP         Set IP/Interface address (only valid with -c or -s)
-  -p PORT       Set port number (only valid with -c or -s)
-  -x            Enable threaded mode (only valid with -s)
-  -h            Show this help message
-  ```
-  The defaults for the interfaces to bind to on the server, the server IP address and the port number are specified in the `rshlib.h` file.  Note these might require adjustments as there is only a single port 1234 and only one student can use this port at a time.  As shown above you can adjust the port numbers and other defaults using the `-i` and `-p` command line options.  
+Terminal 1:
+$ ./dsh -s
+socket server mode:  addr:0.0.0.0:1234
+-> Single-Threaded Mode
+Server listening on port 1234...
+```
+
+**Start client:**
+```bash
+Terminal 2:
+$ ./dsh -c
+socket client mode:  addr:127.0.0.1:1234
+Connected to server
+dsh4> ls
+makefile
+dsh
+dsh_cli.c
+dshlib.c
+dshlib.h
+rsh_cli.c
+rsh_server.c
+rshlib.h
+dsh4> echo "hello world"
+hello world
+dsh4> ls | grep makefile
+makefile
+dsh4> pwd
+/home/student/04-ShellP4
+dsh4> exit
+exiting...
+```
+
+**Server sees:**
+```
+Client connected from 127.0.0.1
+rdsh-exec: ls
+rdsh-exec: echo "hello world"
+rdsh-exec: ls | grep makefile
+rdsh-exec: pwd
+Client exited: getting next connection...
+```
+
+---
+
+## Extra Credit: +10
+
+Implement multi-threaded server to handle multiple clients simultaneously.
+
+**Requirements:**
+
+1. **Use -x flag** to enable threaded mode:
+   ```bash
+   ./dsh -s -x    # Multi-threaded server
+   ```
+
+2. **Create thread per client:**
+   - When accept() returns, create new thread
+   - Thread handles that client's exec_client_requests()
+   - Main thread loops back to accept() immediately
+
+3. **Thread implementation:**
+   ```c
+   pthread_t thread;
+   pthread_create(&thread, NULL, handle_client, (void*)&cli_socket);
+   pthread_detach(thread);  // Auto-cleanup when done
+   ```
+
+4. **Must support concurrent clients:**
+   - Client 1 can send commands while Client 2 connects
+   - Multiple clients can execute commands simultaneously
+   - Each thread is isolated
+
+**Why this matters:**
+Production servers must handle multiple clients. Without threading, clients wait in queue!
+
+---
+
+## Grading Rubric
+
+This assignment will be weighted **75 points**.
+
+- **60 points**: Correct implementation of required functionality
+  - Client implementation (15 points)
+  - Server implementation (25 points)
+  - Pipeline with socket I/O (15 points)
+  - Built-in commands (5 points)
+- **5 points**: Code quality (readable, well-commented, good design)
+- **10 points**: Network protocol analysis (`network-protocol-analysis.md`)
+- **10 points**: [EXTRA CREDIT] Multi-threaded server
+
+**Total points achievable: 85/75**
+
+---
+
+## Submission Requirements
+
+All files for this assignment should be placed in the `6-RShell` directory in your GitHub Classroom repository.
+
+**Required Files:**
+1. `rsh_cli.c` - Client implementation
+2. `rsh_server.c` - Server implementation
+3. `dshlib.c` - Reuse from Part 3
+4. `dshlib.h` - Updated header
+5. `rshlib.h` - Network header
+6. `dsh_cli.c` - Provided
+7. `network-protocol-analysis.md` - Your analysis
+8. All provided files (`makefile`, `test_dsh4.py`, etc.)
+
+**Submission Process:**
+
+1. Ensure all files are in `6-RShell/` directory
+2. Test compilation: `make clean && make`
+3. Test functionality: Start server, connect client, run commands
+4. Commit and push:
+   ```bash
+   git add 04-ShellP4/
+   git commit -m "Complete shell part 4"
+   git push origin main
+   ```
+5. Submit repository URL on Canvas
+
+---
+
+## Testing
+
+Test your implementation manually:
+
+**Terminal 1 (Server):**
+```bash
+make
+./dsh -s
+```
+
+**Terminal 2 (Client):**
+```bash
+./dsh -c
+dsh4> ls
+dsh4> echo hello
+dsh4> ls | grep makefile
+dsh4> exit
+```
+
+**Test multiple clients:** Start multiple client terminals!
+
+**Test network:** Use different machines (if available)
+
+**Use the pytest files provided for automated testing**
+
+---
+
+## Important Concepts
+
+### TCP vs UDP
+
+**TCP (what we use):**
+- Connection-oriented (establish connection first)
+- Reliable (guaranteed delivery, in order)
+- Stream-based (no message boundaries)
+- Example: HTTP, SSH, FTP
+
+**UDP:**
+- Connectionless (just send packets)
+- Unreliable (packets may be lost or reordered)
+- Message-based (datagram boundaries preserved)
+- Example: DNS, video streaming
+
+### Socket System Calls
+
+**Server:**
+- `socket()` - create socket
+- `bind()` - bind to address/port
+- `listen()` - mark as passive (accept connections)
+- `accept()` - accept incoming connection (blocks)
+- `recv()` - receive data
+- `send()` - send data
+- `close()` - close socket
+
+**Client:**
+- `socket()` - create socket
+- `connect()` - connect to server (blocks)
+- `send()` - send data
+- `recv()` - receive data
+- `close()` - close socket
+
+### Why dup2() for Sockets?
+
+Commands expect stdin (fd 0), stdout (fd 1), stderr (fd 2).
+Socket is a different file descriptor (e.g., fd 5).
 
 ```c
-#define RDSH_DEF_PORT           1234        //Default port #
-#define RDSH_DEF_SVR_INTFACE    "0.0.0.0"   //Default start all interfaces
-#define RDSH_DEF_CLI_CONNECT    "127.0.0.1" //Default server is running on
-                                            //localhost 127.0.0.1
+dup2(socket_fd, STDOUT_FILENO);  // Now fd 1 points to socket
+execvp("ls", ...);                // ls writes to fd 1 → socket!
 ```
 
-For this assignment we are providing a lot of leadway for you to modify the design of the starter if it makes your life easier. Below we provide the high level flow of the functions provided by the starter, but **you are free to change any of these things if you desire**.
+---
 
-**Main Start Code Flow**
-From `dsh_cli.c`:
-```
-┌─────────────────────────────┐
-│ENTRY-POINT:                 │
-│main()                       │
-│  mode = initParams()        │
-│  switch mode:               │
-│    case LCLI                │
-│      exec_local_cmd_loop()  │
-│    case SCLI                │
-│      exec_remote_cmd_loop() │
-│    case SSVR                │
-│       start_server()        │
-└─────────────────────────────┘
-```
-**Client Starter Code Flow**
-From `rsh_cli.c`:
-```
-┌────────────────────────┐                        
-│ENTRY-POINT:            │      ┌────────────────┐
-│exec_remote_cmd_loop(){ │      │start_client(){ │
-│                        │      │  socket()      │
-│  start_client()        ├─────▶│  connect()     │
-│                        │      │}               │
-│  loop:                 │      └────────────────┘
-│    print_prompt        │                        
-│    send-request        │                        
-│    recv-response       │     ┌─────────────────┐
-│                        │     │client_cleanup(){│
-│  client-cleanup()      ├────▶│   free buffers  │
-│}                       │     │   close socket  │
-│                        │     │}                │
-└────────────────────────┘     └─────────────────┘
+## Tips for Success
+
+### Start Simple
+
+1. **Client first:** Get start_client() and basic send/recv working
+2. **Server basics:** Get boot_server() and accept working
+3. **Simple command:** Just `echo hello` end-to-end
+4. **Then complexity:** Add pipelines, built-ins
+
+### Debug Network Code
+
+**Use two terminals side-by-side:**
+- Left: Server with debug prints
+- Right: Client sending commands
+- Watch both!
+
+**Debug prints:**
+```c
+printf("[SERVER] Received command: %s\n", cmd);
+printf("[SERVER] Sending %ld bytes\n", bytes_sent);
+printf("[CLIENT] Sent command: %s\n", cmd);
+printf("[CLIENT] Received %ld bytes\n", bytes_received);
 ```
 
-**Server Starter Code Flow**
-From `rsh_server.c`:
+### Common Mistakes
+
+**1. Not sending null terminator:**
+```c
+// WRONG
+send(sock, cmd, strlen(cmd), 0);
+
+// RIGHT
+send(sock, cmd, strlen(cmd)+1, 0);  // Include \0
 ```
-                                                             ┌───────────────────────────┐   
-                              ┌────────────────────────┐     │exec_cli_requests(){       │   
-                              │boot_server(){          │     │ allocate-recv-buffer      │   
-                              │  sock = socket()       │     │ loop:                     │   
-                              │    bind()              │     │   recv()                  │   
-             ┌───────────────▶│    listen()            │     │   build_cmd_list()        │   
-             │                │  return sock;          │     │   rsh_execute_pipeline()  │   
-             │                │}                       │     │   send_msg_eof()          │   
-             │                └────────────────────────┘  ┌─▶│                           │──┐
-             │                ┌────────────────────────┐  │  │   cmd==exit break         │  │
-┌────────────────────────┐    │process_cli_requests(){ │  │  │   cmd==stop-server break  │  │
-│ENTRY-POINT:            │    │ loop:                  │  │  │                           │  │
-│start-server(){         │    │  accept()              │  │  │ free-recv-buffer          │  │
-│  boot_server()         │    │  rc=exec_cli_requests()│  │  │ close socket              │  │
-│  process_cli_requests()│───▶│                        │──┘  │}                          │  │
-│  stop_server()         │    │  if rc==OK_EXIT        │     └───────────────────────────┘  │
-│}                       │    │    break loop          │                                    │
-└────────────────────────┘    │}                       │     ┌───────────────────────────┐  │
-             │                └────────────────────────┘     │rsh-execute-pipeline(){    │  │
-             │                 ┌───────────────────────┐     │ modified execute pipeline │  │
-             │                 │stop_server(){         │     │ dup stdin, stdout, stderr │  │
-             └────────────────▶│  close-server-sock    │     │ file descriptors to the   │◀─┘
-                               │}                      │     │ client connection socket  │   
-                               └───────────────────────┘     │}                          │   
-                                                             └───────────────────────────┘   
+
+**2. Not checking for EOF:**
+```c
+// Keep receiving until EOF marker
+while (1) {
+    bytes = recv(sock, buf, size, 0);
+    if (bytes <= 0) break;
+    if (buf[bytes-1] == RDSH_EOF_CHAR) break;  // Got EOF!
+}
 ```
-#### Approaching this assignment
 
-You are free to approach this assignment anyway you choose.  The advice here is how we did it in the solution, and represents good engineering practice of iterative software development. 
+**3. Forgetting to redirect stderr:**
+```c
+// Last command needs both!
+dup2(cli_socket, STDOUT_FILENO);
+dup2(cli_socket, STDERR_FILENO);  // Don't forget this!
+```
 
-1.  Start by implementing the server.  Shell out a minimal implementation in `rsh_server.c` using the provided arguements from `dsh_cli.c`.  The goal at this point is to be able to start a socket server, accept client connections and properly send and receive messages.  Do not attempt to process any messages at this point.  Build the initial version to accept commands from the client (that are expected to be null `\0` terminated), and then simply reply by _echoing_ the this input back to the client in its expected format (messages from the server back to the client are streams of characters and terminated with the `EOF` character). Remember we provide `RDSH_EOF_CHAR` in `rshlib.h` as a `static constant char` which means you can treat it like a `#define` constant but can also use it as a variable.  In other words you can `send(socket, &RDSH_EOF_CHAR, 1, 0);
+**4. Not closing socket in child:**
+```c
+// After dup2, child should close original socket fd
+dup2(cli_socket, STDOUT_FILENO);
+close(cli_socket);  // Still have stdout dup!
+```
 
-2. Next implement the basic client.  Build the logic to connect to the server with the provided arguments collected from `dsh_cli.c`. From there copy the basic command loop from your previous shell that accepts user input from the command line.  However, instead of calling any fork/exec logic, properly format the input collected from the user and send it to the server.  Remember you must send a null byte at the end as per the protocol.  Because C strings are null terminated you can easily do this by `send(socket, my_string, strlen(my_string)+1,0);`.  After sending, build a simple receive loop given that the data sent back from the server might not come all at one time.  Keep looping until the payload that you see ends with the `RDSH_EOF_CHAR` character.  We describe how to do this above.
+---
 
-3. Expand the rdsh_server implementation to start handling some key built-in commands.  These commands do not require any fork/exec logic.  I would recommend starting with implementing the `exit` command that simply closes the socket connection with the client and loops the server back to the next `accept()` socket API call. Correct operation would now enable a client to connect to the server, run `exit`, then allow another client to connect to the server. After that, implement the `stop-server` command that not only closes the client connection, but also gracefully shuts down the server.  This would involve freeing all allocated memory, and ultimately closing the main server socket. 
+## Testing Checklist
 
-4. Implement the other required built in commands such as `cd`.  There are also other built-in commands that were extra credit earlier that you can integrate such as `dragon`.
+- [ ] Server starts and listens
+- [ ] Client connects to server
+- [ ] Simple command works (echo hello)
+- [ ] Command with output works (ls)
+- [ ] Pipes work (ls | grep txt)
+- [ ] cd command works
+- [ ] exit command closes client
+- [ ] stop-server command stops server
+- [ ] Multiple sequential clients work
+- [ ] EOF marker sent correctly
+- [ ] No hangs or deadlocks
 
-5. Finally implement the fork/exec logic to implement remote commands.  This will largly be the same as in your previous assignment except you will be `dup2()` the `stdin` descriptor in the first process and the `stdout` and `stderr` in the last pipeline process using the socket representing the client connection.  
+---
 
-6. Build your tests to not only show us that your code is working, but to help you debug your code as well.  In this final assignment testing will be 100% your responsibility to implement.
-
-
-#### What to hand in and Grading Rubric
-
-Grading Rubric
-- 70 points: Correct implementation of required functionality points: 
-- 10 points: Code quality (how easy is your solution to follow)
-- 10 points: Answering the written questions: questions.md
-- 10 points: Quality and breadth of BATS unit tests
-- 10 points: [EXTRA CREDIT] Make your server multi-threaded to handle concurrent client connections
-
-Total points achievable is 110/100.
+Good luck! Network programming is a critical skill for systems programmers. Once you complete this, you'll understand how **every networked application works** - from web servers to SSH to multiplayer games!
