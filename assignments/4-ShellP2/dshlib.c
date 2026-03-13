@@ -7,8 +7,10 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <errno.h>
-
 #include "dshlib.h"
+
+// Global variable to store last return code (for extra credit)
+static int last_return_code = 0;
 
 //===================================================================
 // HELPER FUNCTIONS - Memory Management (PROVIDED)
@@ -16,8 +18,6 @@
 
 /**
  * alloc_cmd_buff - Allocate memory for cmd_buff internal buffer
- * 
- * This function is provided for you.
  */
 int alloc_cmd_buff(cmd_buff_t *cmd_buff)
 {
@@ -34,8 +34,6 @@ int alloc_cmd_buff(cmd_buff_t *cmd_buff)
 
 /**
  * free_cmd_buff - Free cmd_buff internal buffer
- * 
- * This function is provided for you.
  */
 int free_cmd_buff(cmd_buff_t *cmd_buff)
 {
@@ -49,8 +47,6 @@ int free_cmd_buff(cmd_buff_t *cmd_buff)
 
 /**
  * clear_cmd_buff - Reset cmd_buff without freeing memory
- * 
- * This function is provided for you.
  */
 int clear_cmd_buff(cmd_buff_t *cmd_buff)
 {
@@ -62,59 +58,131 @@ int clear_cmd_buff(cmd_buff_t *cmd_buff)
 }
 
 //===================================================================
-// PARSING FUNCTIONS - COPY FROM PART 1
+// PARSING FUNCTIONS - From Part 1
 //===================================================================
+
+/**
+ * Helper function to trim leading and trailing whitespace
+ */
+static char *trim_whitespace(char *str)
+{
+    while (isspace((unsigned char)*str)) {
+        str++;
+    }
+    
+    if (*str == '\0') {
+        return str;
+    }
+    
+    char *end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end)) {
+        end--;
+    }
+    
+    *(end + 1) = '\0';
+    return str;
+}
 
 /**
  * build_cmd_buff - Parse a single command string into cmd_buff_t
  * 
- * COPY THIS FROM YOUR PART 1 IMPLEMENTATION!
- * 
- * You already implemented this in Part 1. Copy it here and reuse it.
- * 
- * This function takes a single command string and parses it into
- * argc/argv format, handling quotes correctly.
- * 
- * Requirements:
- *   1. Copy cmd_line into cmd_buff->_cmd_buffer
- *   2. Trim leading/trailing whitespace
- *   3. Parse into tokens, handling:
- *      - Regular space-separated tokens
- *      - Quoted strings (preserve spaces inside quotes)
- *      - Remove quotes but keep their contents
- *   4. Store each token pointer in cmd_buff->argv[]
- *   5. Set cmd_buff->argc to number of tokens
- *   6. Ensure cmd_buff->argv[argc] is NULL (REQUIRED for execvp!)
- * 
- * Examples:
- * 
- *   Input:  "ls -la /tmp"
- *   Output: argc=3, argv=["ls", "-la", "/tmp", NULL]
- * 
- *   Input:  "echo \"hello world\""
- *   Output: argc=2, argv=["echo", "hello world", NULL]
- *   Note: Quotes removed, spaces inside preserved
- * 
- *   Input:  "ls    -la"
- *   Output: argc=2, argv=["ls", "-la", NULL]
- *   Note: Multiple spaces collapsed
- * 
- * Hints:
- *   - Use strcpy() to copy to _cmd_buffer
- *   - Modify _cmd_buffer in place (replace spaces with \0)
- *   - argv[] points into _cmd_buffer (don't duplicate strings)
- *   - Handle both " and ' quotes
- * 
- * @param cmd_line: Command string to parse
- * @param cmd_buff: Allocated cmd_buff_t to populate
- * @return: OK on success, WARN_NO_CMDS if empty, error code on failure
+ * This function takes a single command string (no pipes) and parses
+ * it into argc/argv format. It handles quoted strings to preserve
+ * spaces within them.
  */
 int build_cmd_buff(char *cmd_line, cmd_buff_t *cmd_buff)
 {
-    // TODO: Copy your implementation from Part 1
-    // This is the same function you wrote last week!
+    // Check for NULL inputs
+    if (cmd_line == NULL || cmd_buff == NULL) {
+        return ERR_MEMORY;
+    }
     
-    return ERR_MEMORY;  // Placeholder - replace with your implementation
+    // Trim leading/trailing whitespace from input
+    char *trimmed = trim_whitespace(cmd_line);
+    
+    // Check if empty after trimming
+    if (*trimmed == '\0') {
+        cmd_buff->argc = 0;
+        return OK;
+    }
+    
+    // Copy the trimmed string to the internal buffer
+    strncpy(cmd_buff->_cmd_buffer, trimmed, SH_CMD_MAX - 1);
+    cmd_buff->_cmd_buffer[SH_CMD_MAX - 1] = '\0';
+    
+    // Parse the command line into tokens with quote handling
+    int argc = 0;
+    char *buffer = cmd_buff->_cmd_buffer;
+    int input_len = strlen(buffer);
+    int pos = 0;
+    
+    while (argc < CMD_ARGV_MAX - 1 && pos < input_len) {
+        // Skip whitespace
+        while (pos < input_len && (buffer[pos] == ' ' || buffer[pos] == '\t')) {
+            pos++;
+        }
+        
+        if (pos >= input_len) {
+            break;
+        }
+        
+        // Check for quoted strings
+        char *arg_start;
+        
+        if (buffer[pos] == '"') {
+            // Double-quoted string
+            pos++; // Skip opening quote
+            arg_start = &buffer[pos];
+            
+            // Find closing quote
+            while (pos < input_len && buffer[pos] != '"') {
+                pos++;
+            }
+            
+            // Null-terminate at closing quote
+            if (pos < input_len) {
+                buffer[pos] = '\0';
+                pos++; // Skip closing quote
+            }
+        } else if (buffer[pos] == '\'') {
+            // Single-quoted string
+            pos++; // Skip opening quote
+            arg_start = &buffer[pos];
+            
+            // Find closing quote
+            while (pos < input_len && buffer[pos] != '\'') {
+                pos++;
+            }
+            
+            // Null-terminate at closing quote
+            if (pos < input_len) {
+                buffer[pos] = '\0';
+                pos++; // Skip closing quote
+            }
+        } else {
+            // Regular argument - find end
+            arg_start = &buffer[pos];
+            while (pos < input_len && buffer[pos] != ' ' && buffer[pos] != '\t') {
+                pos++;
+            }
+            
+            // Null-terminate at end of argument
+            if (pos < input_len) {
+                buffer[pos] = '\0';
+                pos++;
+            }
+        }
+        
+        // Store the argument
+        cmd_buff->argv[argc] = arg_start;
+        argc++;
+    }
+    
+    // Set argc and NULL terminate the argv array
+    cmd_buff->argc = argc;
+    cmd_buff->argv[argc] = NULL;
+    
+    return OK;
 }
 
 //===================================================================
@@ -123,21 +191,19 @@ int build_cmd_buff(char *cmd_line, cmd_buff_t *cmd_buff)
 
 /**
  * match_command - Check if input is a built-in command
- * 
- * This function is provided for you.
  */
 Built_In_Cmds match_command(const char *input)
 {
+    if (input == NULL) {
+        return BI_NOT_BI;
+    }
     if (strcmp(input, EXIT_CMD) == 0) {
         return BI_CMD_EXIT;
     }
-    if (strcmp(input, DRAGON_CMD) == 0) {
-        return BI_CMD_DRAGON;
-    }
-    if (strcmp(input, CD_CMD) == 0) {
+    if (strcmp(input, "cd") == 0) {
         return BI_CMD_CD;
     }
-    if (strcmp(input, RC_CMD) == 0) {
+    if (strcmp(input, "rc") == 0) {
         return BI_CMD_RC;
     }
     return BI_NOT_BI;
@@ -145,41 +211,17 @@ Built_In_Cmds match_command(const char *input)
 
 /**
  * exec_built_in_cmd - Execute built-in commands
- * 
- * YOU NEED TO IMPLEMENT THE CD COMMAND HERE!
- * 
- * Built-in commands run in the shell process itself, not in a child.
- * This is why cd must be built-in - it modifies the shell's own directory.
- * 
- * For cd command:
- *   - If no arguments (argc == 1): do nothing
- *   - If one argument (argc == 2): chdir() to that directory
- *   - Print error if chdir() fails
- * 
- * Example:
- *   cmd->argv = ["cd", "/tmp", NULL]
- *   cmd->argc = 2
- *   Action: chdir("/tmp")
- * 
- * Example (no args):
- *   cmd->argv = ["cd", NULL]
- *   cmd->argc = 1
- *   Action: do nothing (don't change directory)
- * 
- * System call:
- *   int chdir(const char *path);
- *   Returns 0 on success, -1 on error
- * 
- * Error handling:
- *   if (chdir(path) != 0) {
- *       perror("cd");
- *   }
- * 
- * @param cmd: Parsed command buffer
- * @return: BI_CMD_EXIT if exit, BI_EXECUTED if built-in executed, BI_NOT_BI if not built-in
+ * Returns:
+ *   BI_CMD_EXIT - exit command was executed
+ *   BI_EXECUTED - built-in command was executed successfully
+ *   BI_NOT_BI - not a built-in command
  */
 Built_In_Cmds exec_built_in_cmd(cmd_buff_t *cmd)
 {
+    if (cmd == NULL || cmd->argv[0] == NULL) {
+        return BI_NOT_BI;
+    }
+    
     Built_In_Cmds bi_cmd = match_command(cmd->argv[0]);
     
     switch (bi_cmd) {
@@ -187,230 +229,168 @@ Built_In_Cmds exec_built_in_cmd(cmd_buff_t *cmd)
             // Exit is handled in main loop
             return BI_CMD_EXIT;
             
-        case BI_CMD_DRAGON:
-            // Extra credit from Part 1
-            #ifdef DRAGON_IMPLEMENTED
-            print_dragon();
-            #else
-            printf("Dragon not implemented\n");
-            #endif
-            return BI_EXECUTED;
-            
         case BI_CMD_CD:
-            // TODO: Implement cd command here
-            // Requirements:
-            //   1. If argc == 1: do nothing (no directory specified)
-            //   2. If argc >= 2: call chdir(cmd->argv[1])
-            //   3. If chdir fails: call perror("cd")
-            //   4. Return BI_EXECUTED
-            
-            printf("cd not implemented yet!\n");
+            // CD built-in: change directory
+            if (cmd->argc < 2) {
+                // No argument - do nothing (stay in current directory)
+                return BI_EXECUTED;
+            }
+            if (chdir(cmd->argv[1]) != 0) {
+                perror("cd");
+            }
             return BI_EXECUTED;
             
         case BI_CMD_RC:
-            // Extra credit - print last return code
-            // TODO: Implement if doing extra credit
-            printf("rc not implemented yet!\n");
+            // Extra credit: print last return code
+            printf("%d\n", last_return_code);
             return BI_EXECUTED;
             
         default:
-            // Not a built-in command
             return BI_NOT_BI;
     }
 }
 
 //===================================================================
-// EXECUTION FUNCTIONS - YOU IMPLEMENT THESE
+// EXECUTION FUNCTIONS - Fork/Exec Pattern
 //===================================================================
 
 /**
- * exec_cmd - Execute external command using fork/exec
+ * exec_cmd - Execute an external command using fork/exec
  * 
- * YOU NEED TO IMPLEMENT THIS FUNCTION! This is the core of Part 2.
- * 
- * This function implements the fork/exec pattern to run external commands.
- * 
- * Algorithm:
- *   1. Fork the process
- *      pid_t pid = fork();
- *      
- *   2. Check fork return value:
- *      if (pid < 0) {
- *          // Fork failed
- *          perror("fork");
- *          return ERR_EXEC_CMD;
- *      }
- *      
- *   3. In child process (pid == 0):
- *      execvp(cmd->argv[0], cmd->argv);
- *      // If we get here, execvp failed
- *      perror("execvp");
- *      exit(EXIT_FAILURE);
- *      
- *   4. In parent process (pid > 0):
- *      int status;
- *      waitpid(pid, &status, 0);
- *      // Extract exit code with WEXITSTATUS(status)
- *      if (WIFEXITED(status)) {
- *          return WEXITSTATUS(status);
- *      }
- *      return ERR_EXEC_CMD;
- * 
- * Important notes:
- *   - execvp() searches PATH environment variable
- *   - cmd->argv MUST be NULL-terminated (argv[argc] == NULL)
- *   - If execvp() returns, it failed (command not found, etc.)
- *   - Child MUST exit() after failed execvp()
- *   - Parent MUST wait for child to avoid zombies
- *   - Use WIFEXITED() to check if child exited normally
- *   - Use WEXITSTATUS() to extract exit code
- * 
- * System calls you'll use:
- *   - fork() - Create child process
- *   - execvp() - Execute command (searches PATH)
- *   - waitpid() - Wait for specific child
- *   - exit() - Terminate child (only if execvp fails)
- * 
- * Macros you'll use:
- *   - WIFEXITED(status) - True if child exited normally
- *   - WEXITSTATUS(status) - Extract exit code from status
- * 
- * For extra credit:
- *   - Check errno after execvp failure
- *   - If errno == ENOENT: command not found (exit 127)
- *   - If errno == EACCES: permission denied (exit 126)
- *   - Print appropriate error messages
- *   - Store return code in global variable
- * 
- * @param cmd: Command to execute
- * @return: Child's exit code on success, error code on failure
+ * This function:
+ *   1. Forks the process
+ *   2. Child executes the command using execvp()
+ *   3. Parent waits for child using waitpid()
+ *   4. Returns the exit code of the command
  */
 int exec_cmd(cmd_buff_t *cmd)
 {
-    // TODO: Implement fork/exec here
-    // This is the main function you need to implement for Part 2
+    if (cmd == NULL || cmd->argv[0] == NULL) {
+        return ERR_EXEC_CMD;
+    }
     
-    // Suggested approach:
-    // 1. Call fork()
-    // 2. Check fork return:
-    //    - if (pid < 0): fork failed, return error
-    //    - if (pid == 0): child process
-    //      * Call execvp(cmd->argv[0], cmd->argv)
-    //      * If it returns, print error and exit(EXIT_FAILURE)
-    //    - if (pid > 0): parent process
-    //      * Declare: int status;
-    //      * Call waitpid(pid, &status, 0)
-    //      * Check WIFEXITED(status)
-    //      * Return WEXITSTATUS(status)
+    // Fork the process
+    pid_t pid = fork();
     
-    printf("exec_cmd not implemented yet!\n");
-    return ERR_EXEC_CMD;
+    // Check fork result
+    if (pid < 0) {
+        // Fork failed
+        perror("fork");
+        return ERR_EXEC_CMD;
+    }
+    else if (pid == 0) {
+        // Child process - execute command
+        execvp(cmd->argv[0], cmd->argv);
+        
+        // If execvp returns, it failed
+        // Print error message based on errno
+        if (errno == ENOENT) {
+            fprintf(stderr, "Command not found in PATH\n");
+            exit(127); // Standard shell exit code for command not found
+        }
+        else if (errno == EACCES) {
+            fprintf(stderr, "Permission denied\n");
+            exit(126); // Standard shell exit code for permission denied
+        }
+        else {
+            perror("execvp");
+            exit(ERR_EXEC_CMD);
+        }
+    }
+    else {
+        // Parent process - wait for child
+        int status;
+        waitpid(pid, &status, 0);
+        
+        // Extract exit code
+        if (WIFEXITED(status)) {
+            last_return_code = WEXITSTATUS(status);
+            return last_return_code;
+        }
+        return ERR_EXEC_CMD;
+    }
 }
 
 //===================================================================
-// MAIN SHELL LOOP - YOU IMPLEMENT THIS
+// MAIN SHELL LOOP
 //===================================================================
 
 /**
- * exec_local_cmd_loop - Main shell loop for Part 2
+ * exec_local_cmd_loop - Main shell loop
  * 
- * YOU NEED TO IMPLEMENT THIS FUNCTION!
- * 
- * This is your shell's main loop. It reads commands, parses them,
- * and executes them using fork/exec or as built-ins.
- * 
- * Algorithm:
- *   1. Allocate a cmd_buff_t
- *   2. Loop forever:
- *      a. Print prompt ("dsh2> ")
- *      b. Read line with fgets()
- *      c. Remove trailing newline
- *      d. Check for exit command
- *      e. Parse line into cmd_buff_t
- *      f. Check if built-in command
- *      g. If not built-in, execute with fork/exec
- *      h. Continue loop
- *   3. Free cmd_buff_t when done
- * 
- * Starter code:
- * 
- *   char cmd_line[SH_CMD_MAX];
- *   cmd_buff_t cmd;
- *   int rc;
- *   
- *   // Allocate cmd_buff
- *   if (alloc_cmd_buff(&cmd) != OK) {
- *       return ERR_MEMORY;
- *   }
- *   
- *   while (1) {
- *       // Print prompt
- *       printf("%s", SH_PROMPT);
- *       
- *       // Read input
- *       if (fgets(cmd_line, SH_CMD_MAX, stdin) == NULL) {
- *           printf("\n");
- *           break;
- *       }
- *       
- *       // Remove trailing newline
- *       cmd_line[strcspn(cmd_line, "\n")] = '\0';
- *       
- *       // Check for exit command
- *       if (strcmp(cmd_line, EXIT_CMD) == 0) {
- *           printf("exiting...\n");
- *           break;
- *       }
- *       
- *       // TODO: Parse command line
- *       rc = build_cmd_buff(cmd_line, &cmd);
- *       if (rc != OK || cmd.argc == 0) {
- *           continue; // Empty or parse error
- *       }
- *       
- *       // TODO: Check if built-in command
- *       Built_In_Cmds bi = exec_built_in_cmd(&cmd);
- *       if (bi == BI_CMD_EXIT) {
- *           printf("exiting...\n");
- *           break;
- *       }
- *       if (bi == BI_EXECUTED) {
- *           continue; // Built-in was executed
- *       }
- *       
- *       // TODO: Not built-in, execute with fork/exec
- *       rc = exec_cmd(&cmd);
- *       
- *       // TODO: For extra credit, store rc in global variable
- *   }
- *   
- *   free_cmd_buff(&cmd);
- *   return OK;
- * 
- * Key differences from Part 1:
- *   - Use single cmd_buff_t (not command_list_t)
- *   - Actually execute commands (don't just print)
- *   - Handle built-in commands
- *   - No pipe handling (single commands only)
- * 
- * Error handling:
- *   - Empty input: just continue loop
- *   - Parse failure: continue loop
- *   - Exec failure: command already printed error, continue
- * 
- * @return: OK on success
+ * This function:
+ *   1. Loop forever (while(1))
+ *   2. Print the shell prompt (SH_PROMPT)
+ *   3. Read a line of input using fgets()
+ *   4. Remove trailing newline
+ *   5. Check for exit command - if found, print "exiting..." and break
+ *   6. Parse the command line using build_cmd_buff()
+ *   7. Handle empty commands
+ *   8. Check if built-in command, execute it
+ *   9. If not built-in, fork/exec the external command
+ *   10. Loop back to step 2
  */
 int exec_local_cmd_loop()
 {
-    // TODO: Implement this function
-    // See detailed comments above for guidance
+    char cmd_line[SH_CMD_MAX];
+    cmd_buff_t cmd;
+    int rc;
     
-    // Remember:
-    // 1. Allocate cmd_buff_t with alloc_cmd_buff()
-    // 2. Loop forever (while(1))
-    // 3. Read input, parse, execute
-    // 4. Handle built-ins separately from external commands
-    // 5. Free cmd_buff_t before returning
+    // Allocate cmd_buff
+    rc = alloc_cmd_buff(&cmd);
+    if (rc != OK) {
+        return ERR_MEMORY;
+    }
+    
+    while (1) {
+        // Print the shell prompt
+        printf("%s", SH_PROMPT);
+        
+        // Read a line of input
+        if (fgets(cmd_line, SH_CMD_MAX, stdin) == NULL) {
+            // EOF received (Ctrl+D)
+            printf("\n");
+            break;
+        }
+        
+        // Remove trailing newline
+        cmd_line[strcspn(cmd_line, "\n")] = '\0';
+        
+        // Check for exit command
+        if (strcmp(cmd_line, EXIT_CMD) == 0) {
+            printf("exiting...\n");
+            break;
+        }
+        
+        // Clear the command buffer and parse
+        clear_cmd_buff(&cmd);
+        rc = build_cmd_buff(cmd_line, &cmd);
+        
+        // Handle empty or parse error
+        if (rc != OK || cmd.argc == 0) {
+            continue;
+        }
+        
+        // Check if built-in command
+        Built_In_Cmds bi = exec_built_in_cmd(&cmd);
+        
+        if (bi == BI_CMD_EXIT) {
+            printf("exiting...\n");
+            break;
+        }
+        
+        if (bi == BI_EXECUTED) {
+            // Built-in was executed, continue to next command
+            continue;
+        }
+        
+        // Not a built-in command - fork/exec
+        exec_cmd(&cmd);
+    }
+    
+    // Free memory
+    free_cmd_buff(&cmd);
     
     return OK;
 }
+
